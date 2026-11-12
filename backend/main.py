@@ -15,6 +15,10 @@
 """
 import base64
 import binascii
+import csv
+import hashlib
+import io
+import zipfile
 import json
 import random
 import secrets
@@ -28,7 +32,7 @@ from typing import Optional
 from fastapi import FastAPI, File, Form, Query, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -286,8 +290,10 @@ def process_sound(raw: bytes, event_id: str, buoy_id: Optional[str], source: str
     except sound.AudioError as e:
         raise ApiError(400, "bad_request", str(e))
     classification = sound.classify(audio, sr)
-    sound.save_wav(AUDIO_DIR / f"{event_id}.wav", audio, sr)
-    return storage.add_sound_event(event_id, buoy_id, source, timestamp, classification)
+    path = AUDIO_DIR / f"{event_id}.wav"
+    sound.save_wav(path, audio, sr)
+    sha = hashlib.sha256(path.read_bytes()).hexdigest()  # отпечаток записи в момент приёма — для доказательной базы
+    return storage.add_sound_event(event_id, buoy_id, source, timestamp, classification, sha)
 
 
 def classify_out(ev: dict) -> dict:
@@ -465,7 +471,7 @@ def post_satellite(
     geo = {"lat": lat, "lon": lon}
     image_id = new_id("img")
     (IMAGES_DIR / f"{image_id}.jpg").write_bytes(jpeg)
-    storage.add_image(image_id, ts, lat, lon)
+    storage.add_image(image_id, ts, lat, lon, hashlib.sha256(jpeg).hexdigest())
 
     event = None
     if detected:
@@ -596,6 +602,89 @@ def get_water_event_context(event_id: str, minutes: float = Query(5, ge=1, le=12
     if not ev:
         raise ApiError(404, "not_found", "Water event not found")
     return analytics.context("water", ev, BUOYS, distance_km, minutes)
+
+
+# ---------- Доказательства и разметка инспектором (сверх контракта v2) ----------
+@app.get("/api/v1/events/{event_id}/evidence", responses=NOT_FOUND, tags=["evidence"],
+         summary="Отпечаток SHA-256 записи, снятый в момент приёма: проверка, что доказательство не подменено")
+def get_evidence(event_id: str):
+    ev = storage.get_sound_event(event_id)
+    if not ev:
+        raise ApiError(404, "not_found", "Event not found")
+    path = AUDIO_DIR / f"{event_id}.wav"
+    stored = storage.sound_hash(event_id)
+    current = hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
+    return {"event_id": event_id, "received_at": ev["timestamp"], "buoy_id": ev["buoy_id"],
+            "sha256": stored, "file_sha256_now": current, "intact": bool(stored) and stored == current,
+            "bytes": path.stat().st_size if path.is_file() else None, "model_feature_version": sound.model_version(),
+            "how_to_verify": f"sha256sum {event_id}.wav — должно совпасть с sha256"}
+
+
+VALID_LABELS = {"seal", "boat", "gunshot", "anomaly", "background"}
+
+
+class LabelIn(BaseModel):
+    label: str = Field(description="что это на самом деле: seal | boat | gunshot | anomaly | background (фон, шум)")
+    note: Optional[str] = Field(None, max_length=300)
+
+
+@app.put("/api/v1/events/{event_id}/label", responses=NOT_FOUND, tags=["labels"],
+         summary="Инспектор подтверждает или исправляет класс звука → запись идёт в дообучение")
+def put_label(event_id: str, body: LabelIn):
+    if not storage.get_sound_event(event_id):
+        raise ApiError(404, "not_found", "Event not found")
+    if body.label not in VALID_LABELS:
+        raise ApiError(400, "bad_request", "label must be one of: " + ", ".join(sorted(VALID_LABELS)))
+    storage.set_label(event_id, body.label, body.note, now_iso())
+    return storage.get_label(event_id)
+
+
+@app.delete("/api/v1/events/{event_id}/label", status_code=204, tags=["labels"], summary="Снять разметку")
+def delete_label(event_id: str):
+    storage.delete_label(event_id)
+    return Response(status_code=204)
+
+
+@app.get("/api/v1/events/{event_id}/label", tags=["labels"], summary="Разметка события (если есть)")
+def get_label(event_id: str):
+    return storage.get_label(event_id) or {}
+
+
+@app.get("/api/v1/labels", tags=["labels"], summary="Разметка инспекторов и точность модели по их решениям")
+def list_labels():
+    items = storage.list_labels()
+    # модель отдаёт метки контракта, где фон показан как anomaly — сравниваем в тех же терминах
+    for i in items:
+        i["model_correct"] = i["model_label"] == ("anomaly" if i["inspector_label"] == "background" else i["inspector_label"])
+    agree = [i for i in items if i["model_correct"]]
+    by_class: dict[str, dict] = {}
+    for i in items:
+        c = by_class.setdefault(i["inspector_label"], {"labeled": 0, "model_correct": 0})
+        c["labeled"] += 1
+        c["model_correct"] += i["model_correct"]
+    return {"total": len(items), "model_correct": len(agree),
+            "field_accuracy": round(len(agree) / len(items), 3) if items else None,
+            "by_class": by_class, "items": items}
+
+
+@app.get("/api/v1/labels/export", tags=["labels"],
+         summary="Архив для дообучения: <класс>/<event_id>.wav + labels.csv → распаковать в ml/data_labeled/")
+def export_labels():
+    items = storage.list_labels()
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        table = io.StringIO()
+        w = csv.writer(table)
+        w.writerow(["event_id", "inspector_label", "model_label", "confidence", "buoy_id", "timestamp", "sha256", "note"])
+        for i in items:
+            path = AUDIO_DIR / f"{i['event_id']}.wav"
+            if path.is_file():
+                z.write(path, f"{i['inspector_label']}/{i['event_id']}.wav")
+            w.writerow([i["event_id"], i["inspector_label"], i["model_label"], i["confidence"], i["buoy_id"],
+                        i["timestamp"], storage.sound_hash(i["event_id"]), i["note"] or ""])
+        z.writestr("labels.csv", table.getvalue())
+    return Response(buf.getvalue(), media_type="application/zip",
+                    headers={"Content-Disposition": "attachment; filename=labels.zip"})
 
 
 # ---------- Гибель тюленей: находки и расследование (сверх контракта v2) ----------

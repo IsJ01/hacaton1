@@ -31,6 +31,9 @@ CREATE TABLE IF NOT EXISTS telemetry (
 CREATE TABLE IF NOT EXISTS carcasses (
     carcass_id TEXT PRIMARY KEY, found_at TEXT, lat REAL, lon REAL, count INTEGER, condition TEXT, note TEXT
 );
+CREATE TABLE IF NOT EXISTS labels (
+    event_id TEXT PRIMARY KEY, label TEXT, note TEXT, labeled_at TEXT
+);
 CREATE INDEX IF NOT EXISTS idx_sound_ts ON sound_events (timestamp);
 CREATE INDEX IF NOT EXISTS idx_tel_buoy_ts ON telemetry (buoy_id, timestamp);
 CREATE INDEX IF NOT EXISTS idx_meas_buoy_ts ON measurements (buoy_id, timestamp);
@@ -48,7 +51,8 @@ def init(path: Path) -> None:
     _db.row_factory = sqlite3.Row
     _db.executescript(SCHEMA)
     # колонки, добавленные позже: в старой базе дописываем их на месте
-    for table, column in [("telemetry", "methane_nmol"), ("water_events", "methane_nmol")]:
+    for table, column in [("telemetry", "methane_nmol"), ("water_events", "methane_nmol"),
+                          ("sound_events", "audio_sha256"), ("images", "sha256")]:
         cols = {r[1] for r in _db.execute(f"PRAGMA table_info({table})")}
         if column not in cols:
             _db.execute(f"ALTER TABLE {table} ADD COLUMN {column} REAL")
@@ -90,11 +94,13 @@ def _sound(row: sqlite3.Row) -> dict:
     }
 
 
-def add_sound_event(event_id: str, buoy_id: Optional[str], source: str, timestamp: str, classification: dict) -> dict:
+def add_sound_event(event_id: str, buoy_id: Optional[str], source: str, timestamp: str, classification: dict,
+                    audio_sha256: Optional[str] = None) -> dict:
     _execute(
-        "INSERT INTO sound_events VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO sound_events (event_id, buoy_id, source, timestamp, label, confidence, candidates, audio_sha256) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         (event_id, buoy_id, source, timestamp, classification["label"], classification["confidence"],
-         json.dumps(classification["candidates"])),
+         json.dumps(classification["candidates"]), audio_sha256),
     )
     return get_sound_event(event_id)
 
@@ -170,8 +176,14 @@ def last_value(buoy_id: str, column: str) -> Optional[dict]:
 
 
 # ---------- снимки ----------
-def add_image(image_id: str, timestamp: str, lat: float, lon: float) -> None:
-    _execute("INSERT INTO images VALUES (?, ?, ?, ?)", (image_id, timestamp, lat, lon))
+def add_image(image_id: str, timestamp: str, lat: float, lon: float, sha256: Optional[str] = None) -> None:
+    _execute("INSERT INTO images (image_id, timestamp, lat, lon, sha256) VALUES (?, ?, ?, ?, ?)",
+             (image_id, timestamp, lat, lon, sha256))
+
+
+def get_image(image_id: str) -> Optional[dict]:
+    rows = _query("SELECT * FROM images WHERE image_id = ?", (image_id,))
+    return dict(rows[0]) if rows else None
 
 
 # ---------- события воды ----------
@@ -239,3 +251,32 @@ def get_carcass(carcass_id: str) -> Optional[dict]:
 
 def list_carcasses(limit: int) -> list[dict]:
     return [_carcass(r) for r in _query("SELECT * FROM carcasses ORDER BY found_at DESC, rowid DESC LIMIT ?", (limit,))]
+
+
+# ---------- хеши доказательств ----------
+def sound_hash(event_id: str) -> Optional[str]:
+    rows = _query("SELECT audio_sha256 FROM sound_events WHERE event_id = ?", (event_id,))
+    return rows[0]["audio_sha256"] if rows else None
+
+
+# ---------- разметка инспекторами (для дообучения модели) ----------
+def set_label(event_id: str, label: str, note: Optional[str], labeled_at: str) -> None:
+    _execute("INSERT INTO labels VALUES (?, ?, ?, ?) ON CONFLICT(event_id) DO UPDATE SET "
+             "label = excluded.label, note = excluded.note, labeled_at = excluded.labeled_at",
+             (event_id, label, note, labeled_at))
+
+
+def delete_label(event_id: str) -> None:
+    _execute("DELETE FROM labels WHERE event_id = ?", (event_id,))
+
+
+def list_labels() -> list[dict]:
+    rows = _query("SELECT l.event_id, l.label AS inspector_label, l.note, l.labeled_at, s.label AS model_label, "
+                  "s.confidence, s.buoy_id, s.timestamp FROM labels l JOIN sound_events s ON s.event_id = l.event_id "
+                  "ORDER BY l.labeled_at DESC")
+    return [dict(r) for r in rows]
+
+
+def get_label(event_id: str) -> Optional[dict]:
+    rows = _query("SELECT * FROM labels WHERE event_id = ?", (event_id,))
+    return dict(rows[0]) if rows else None

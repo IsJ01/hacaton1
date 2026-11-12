@@ -46,6 +46,12 @@
     getCarcasses: () => request('/api/v1/carcasses'),
     postCarcass: (body) => request('/api/v1/carcasses', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
     getInvestigation: (id) => request('/api/v1/carcasses/' + encodeURIComponent(id) + '/investigation'),
+    // Разметка инспектором и отпечатки доказательств (сверх контракта)
+    getLabel: (id) => request('/api/v1/events/' + encodeURIComponent(id) + '/label'),
+    putLabel: (id, label) => request('/api/v1/events/' + encodeURIComponent(id) + '/label', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ label }) }),
+    getLabels: () => request('/api/v1/labels'),
+    labelsExportUrl: () => C.API_BASE + '/api/v1/labels/export',
+    getEvidence: (id) => request('/api/v1/events/' + encodeURIComponent(id) + '/evidence'),
     // GET /api/v1/seals → { total_detections, estimate_min, buoys, groups: [{ center, drift, track, … }] }
     getSeals: (params) => request('/api/v1/seals' + query(params)),
     // GET /api/v1/model-info → { sound, forecast, library_size } (сверх контракта)

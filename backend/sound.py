@@ -1,7 +1,9 @@
 """Классификация звука обученной моделью из ml/models/classifier.pkl.
 
-Признаки считаются точно так же, как при обучении (ml/02_preprocess.py, ml/05_inference.py):
-  аудио → моно → 22050 Гц → low-pass 4 кГц («подводный» фильтр) → 13 MFCC → среднее по времени.
+Формат модели:
+  v2 — словарь {"model", "labels", "feature_version": 2} из ml/06_train_robust.py, признаки — audio_features.py
+       (тот же код, что при обучении);
+  v1 — голый классификатор: моно → 22050 Гц → low-pass 4 кГц → 13 MFCC → среднее по времени.
 """
 import io
 from pathlib import Path
@@ -12,6 +14,7 @@ import numpy as np
 import soundfile as sf
 from scipy.signal import butter, filtfilt
 
+import audio_features
 from config import ANOMALY_THRESHOLD, MODEL_PATH
 
 SR = 22050
@@ -25,6 +28,8 @@ MODEL_LABELS = ["boat", "gunshot", "seal", "anomaly", "background"]
 CONTRACT_LABELS = ["seal", "boat", "gunshot", "anomaly"]
 
 _model = None
+_labels = MODEL_LABELS
+_version = 1
 
 
 class AudioError(Exception):
@@ -32,10 +37,15 @@ class AudioError(Exception):
 
 
 def load_model() -> None:
-    global _model
+    global _model, _labels, _version
     if not MODEL_PATH.is_file():
         raise RuntimeError(f"Не найдена модель: {MODEL_PATH} (задай MODEL_PATH)")
-    _model = joblib.load(str(MODEL_PATH))
+    obj = joblib.load(str(MODEL_PATH))
+    if isinstance(obj, dict):
+        _model, _labels, _version = obj["model"], obj["labels"], obj.get("feature_version", 2)
+    else:
+        _model, _labels, _version = obj, MODEL_LABELS, 1
+    print(f"Модель звука: признаки v{_version}, классы {_labels}")
     classify(np.zeros(SR, dtype=np.float32), SR)  # прогрев: первый вызов librosa медленный
 
 
@@ -56,7 +66,13 @@ def save_wav(path: Path, audio: np.ndarray, sr: int) -> None:
     sf.write(str(path), audio, sr, subtype="PCM_16")
 
 
+def model_version() -> int:
+    return _version
+
+
 def _features(audio: np.ndarray, sr: int) -> np.ndarray:
+    if _version >= 2:
+        return audio_features.features(audio, sr)
     audio = audio.astype(np.float64)
     if sr != SR:
         audio = librosa.resample(audio, orig_sr=sr, target_sr=SR)
@@ -70,7 +86,7 @@ def _features(audio: np.ndarray, sr: int) -> np.ndarray:
 
 def classify(audio: np.ndarray, sr: int) -> dict:
     """Возвращает ClassificationResult из контракта: { label, confidence, candidates }."""
-    proba = dict(zip(MODEL_LABELS, _model.predict_proba(_features(audio, sr))[0]))
+    proba = dict(zip(_labels, _model.predict_proba(_features(audio, sr))[0]))
     proba["anomaly"] += proba.pop("background")
 
     candidates = sorted(

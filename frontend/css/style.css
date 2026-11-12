@@ -397,3 +397,17 @@ code { font-family: "Roboto Mono", ui-monospace, monospace; font-size: .92em; ba
 .drift-label { position: absolute; transform: translate(-50%, -50%); background: #d93025; color: #fff; border-radius: 999px; padding: 3px 10px; font-size: 11px; white-space: nowrap; }
 .quake { fill: #ff6d00; fill-opacity: .35; stroke: #ff6d00; stroke-width: 1.5; }
 @media (max-width: 900px) { .mort-grid { grid-template-columns: 1fr; } }
+
+/* --- разметка, отпечаток записи, точка выстрела --- */
+.label-btns { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0; }
+.label-btns .ctx-btn { background: var(--soft); }
+.label-btns .ctx-btn.on { background: var(--text); color: #fff; }
+.evidence { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; font-size: 12px; }
+.evidence .ok { color: #137333; font-weight: 500; }
+.evidence .bad { color: var(--crit); font-weight: 500; }
+.locate { margin-top: 8px; padding: 8px 10px; border-radius: var(--r-sm); background: #fce8e6; color: #a50e0e; font-size: 13px; }
+.loc-mk { position: absolute; transform: translate(-50%, -50%); width: 34px; height: 34px; border-radius: 50%; background: var(--crit); color: #fff;
+  display: flex; align-items: center; justify-content: center; font-size: 18px; border: 3px solid #fff; box-shadow: 0 4px 14px rgba(217,48,37,.5); }
+.loc-label { position: absolute; transform: translate(22px, -50%); background: var(--text); color: #fff; border-radius: 999px; padding: 3px 10px; font-size: 11px; white-space: nowrap; }
+.loc-err { fill: #d93025; fill-opacity: .10; stroke: #d93025; stroke-width: 1.5; stroke-dasharray: 4 4; }
+.loc-ray { stroke: #d93025; stroke-width: 1.5; stroke-opacity: .6; stroke-dasharray: 2 5; fill: none; }

@@ -1,49 +1,162 @@
 {
-  "accuracy": 0.9736842105263158,
-  "precision_macro": 0.9777777777777779,
-  "recall_macro": 0.975,
-  "f1_macro": 0.9749019607843138,
-  "confusion_matrix": [
-    [
-      8,
-      0,
-      0,
-      0,
-      0
-    ],
-    [
-      0,
-      7,
-      0,
-      0,
-      0
-    ],
-    [
-      0,
-      0,
-      7,
-      1,
-      0
-    ],
-    [
-      0,
-      0,
-      0,
-      8,
-      0
-    ],
-    [
-      0,
-      0,
-      0,
-      0,
-      7
-    ]
-  ],
-  "n_samples": 38,
-  "n_features": 13,
-  "cv_f1_mean": 0.9578288378288378,
-  "cv_f1_std": 0.04222913548250286,
+  "model": "HistGradientBoosting, признаки v2 (backend/audio_features.py)",
+  "feature_version": 2,
+  "n_features": 69,
+  "n_train": 1800,
+  "train_distribution": {
+    "boat": 360,
+    "gunshot": 360,
+    "seal": 360,
+    "anomaly": 360,
+    "background": 360
+  },
+  "labeled_by_inspectors": 0,
+  "accuracy": 0.957,
+  "f1_macro": 0.957,
+  "precision_macro": 0.961,
+  "recall_macro": 0.957,
+  "n_samples": 300,
+  "cv_f1_mean": 0.968,
+  "cv_f1_std": 0.008,
   "anomaly_threshold": 0.6,
-  "n_classes": 5
+  "n_classes": 5,
+  "evaluation": {
+    "v1_cross_generator": {
+      "accuracy": 0.0,
+      "f1_macro": 0.0,
+      "n": 120,
+      "confusion": {
+        "labels": [
+          "boat",
+          "gunshot",
+          "seal",
+          "anomaly"
+        ],
+        "matrix": [
+          [
+            0,
+            0,
+            30,
+            0
+          ],
+          [
+            30,
+            0,
+            0,
+            0
+          ],
+          [
+            30,
+            0,
+            0,
+            0
+          ],
+          [
+            30,
+            0,
+            0,
+            0
+          ]
+        ]
+      }
+    },
+    "v2_cross_generator": {
+      "accuracy": 0.5,
+      "f1_macro": 0.417,
+      "n": 120,
+      "confusion": {
+        "labels": [
+          "boat",
+          "gunshot",
+          "seal",
+          "anomaly"
+        ],
+        "matrix": [
+          [
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            30,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            30,
+            0
+          ],
+          [
+            0,
+            0,
+            30,
+            0
+          ]
+        ]
+      }
+    },
+    "cv_f1_mean": 0.968,
+    "cv_f1_std": 0.008,
+    "v2_noisy_test": {
+      "accuracy": 0.957,
+      "f1_macro": 0.957,
+      "n": 300,
+      "confusion": {
+        "labels": [
+          "boat",
+          "gunshot",
+          "seal",
+          "anomaly",
+          "background"
+        ],
+        "matrix": [
+          [
+            57,
+            0,
+            0,
+            0,
+            3
+          ],
+          [
+            0,
+            60,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            1,
+            55,
+            0,
+            4
+          ],
+          [
+            0,
+            0,
+            2,
+            55,
+            3
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            60
+          ]
+        ]
+      }
+    },
+    "emulator_files": {
+      "correct": 28,
+      "total": 28,
+      "errors": []
+    }
+  },
+  "train_seconds": 294
 }

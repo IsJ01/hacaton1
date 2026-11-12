@@ -378,9 +378,21 @@ async def scenario_poacher():
         try:
             for step in scenarios.POACHER:
                 await asyncio.sleep(step["pause"])
-                kind, path, sent, kwargs = build(step, now_iso())
-                status, body = await post(kind, path, sent, **kwargs)
-                results.append((step, status, body))
+                if step["kind"] == "shot":  # один выстрел → события на нескольких буях с физической задержкой
+                    arrivals = scenarios.shot_arrivals(step)
+                    # выстрел был раньше на самую долгую задержку: к моменту отправки звук дошёл до всех буёв
+                    fired = datetime.now(timezone.utc) - timedelta(seconds=max(d for _, _, d in arrivals))
+                    status = None
+                    for buoy_id, f, delay in arrivals:
+                        ts = (fired + timedelta(seconds=delay)).strftime("%Y-%m-%dT%H:%M:%SZ")
+                        sub = {"kind": "sound", "buoy_id": buoy_id, "file": f}
+                        kind, path, sent, kwargs = build(sub, ts)
+                        status, body = await post(kind, path, {**sent, "delay_sec": round(delay, 1)}, **kwargs)
+                        results.append((sub, status, body))
+                else:
+                    kind, path, sent, kwargs = build(step, now_iso())
+                    status, body = await post(kind, path, sent, **kwargs)
+                    results.append((step, status, body))
                 SCENARIO["steps"].append({"time": now_iso(), "note": step["note"], "backend_status": status})
             SCENARIO["report"] = summarize(results)
         finally:

@@ -56,6 +56,7 @@ ANOMALY_SALINITY_DELTA = float(os.getenv("ANOMALY_SALINITY_DELTA", "1.0"))  # о
 BUOY_ONLINE_MIN = float(os.getenv("BUOY_ONLINE_MIN", "90"))         # буй на связи, если присылал данные за это время
 LISTEN_RADIUS_KM = float(os.getenv("LISTEN_RADIUS_KM", "25"))       # радиус слышимости, если в buoys.json не задан
 NEIGHBOR_WINDOW_MIN = float(os.getenv("NEIGHBOR_WINDOW_MIN", "10"))  # сосед «слышал то же», если в пределах ± минут
+SOUND_SPEED_MS = float(os.getenv("SOUND_SPEED_MS", "1480"))          # скорость звука в воде — для точки источника
 
 # --- тюлени ---
 SEAL_WINDOW_H = float(os.getenv("SEAL_WINDOW_H", "24"))             # окно анализа вокализаций тюленя

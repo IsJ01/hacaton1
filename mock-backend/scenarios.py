@@ -12,7 +12,7 @@
             (версия «выброс газа»), у Махачкалы — ночные лодки и выстрел у буя 1 (версия «сети и браконьеры»).
             Ветер для обратного дрейфа и землетрясения бэкенд берёт из реальных открытых данных.
   poacher — живой сценарий «браконьер» (паузы в секундах между шагами):
-            лодка у буя 1 → она же у буя 2 → выстрел у буя 2 → выстрел у буя 3 →
+            лодка у буя 1 → она же у буя 2 → выстрел, который слышат буи 3, 2, 4 с задержкой →
             солёность падает у буя 3 → спутник видит пятно там же.
 """
 import math
@@ -71,8 +71,11 @@ def history_steps(hours: int = 24) -> list[dict]:
 POACHER = [
     {"pause": 0, "kind": "sound", "buoy_id": "b-001", "file": "boat_001.wav", "note": "лодка входит в зону буя 1"},
     {"pause": 6, "kind": "sound", "buoy_id": "b-002", "file": "boat_002.wav", "note": "ту же лодку слышит буй 2"},
-    {"pause": 6, "kind": "sound", "buoy_id": "b-002", "file": "gunshot_001.wav", "note": "выстрел у буя 2"},
-    {"pause": 5, "kind": "sound", "buoy_id": "b-003", "file": "gunshot_002.wav", "note": "выстрел слышит буй 3"},
+    # выстрел в точке между буями 2–4: каждый буй слышит его с задержкой расстояние / скорость звука в воде,
+    # по разнице задержек бэкенд находит точку выстрела
+    {"pause": 6, "kind": "shot", "lat": 43.62, "lon": 47.82, "buoys": ["b-003", "b-002", "b-004"],
+     "files": ["gunshot_000.wav", "gunshot_001.wav", "gunshot_002.wav"],
+     "note": "выстрел: три буя слышат его с разной задержкой — бэкенд находит точку"},
     {"pause": 6, "kind": "salinity", "buoy_id": "b-003", "salinity": 9.6, "note": "солёность у буя 3 упала — сброс"},
     {"pause": 5, "kind": "satellite", "file": "discharge_01.jpg", "lat": 43.73, "lon": 47.86, "note": "спутник видит пятно у буя 3"},
 ]
@@ -113,3 +116,19 @@ def mortality_steps() -> list[dict]:
     ]
     steps.sort(key=lambda s: -s["minutes_ago"])
     return steps
+
+
+SOUND_SPEED_MS = 1480.0  # скорость звука в воде
+
+
+def distance_km(a: tuple, b: tuple) -> float:
+    la1, lo1, la2, lo2 = map(math.radians, (a[0], a[1], b[0], b[1]))
+    h = math.sin((la2 - la1) / 2) ** 2 + math.cos(la1) * math.cos(la2) * math.sin((lo2 - lo1) / 2) ** 2
+    return 6371 * 2 * math.asin(math.sqrt(h))
+
+
+def shot_arrivals(step: dict) -> list[tuple[str, str, float]]:
+    """(буй, файл, задержка в секундах) — когда звук выстрела дойдёт до каждого буя."""
+    src = (step["lat"], step["lon"])
+    return [(b, f, distance_km(src, BUOY_GEO[b]) * 1000 / SOUND_SPEED_MS)
+            for b, f in zip(step["buoys"], step["files"])]

@@ -185,6 +185,11 @@
     getCarcasses: () => ok({ total: 0, carcasses: [] }),
     postCarcass: () => Promise.reject(new Error('в режиме заглушек недоступно')),
     getInvestigation: () => Promise.reject(new Error('в режиме заглушек недоступно')),
+    getLabel: () => ok({}),
+    putLabel: () => Promise.reject(new Error('в режиме заглушек недоступно')),
+    getLabels: () => ok({ total: 0, model_correct: 0, field_accuracy: null, items: [] }),
+    labelsExportUrl: () => '#',
+    getEvidence: () => Promise.reject(new Error('нет в заглушках')),
     getSeals: () => ok({ generated_at: ago(0), window_h: 24, total_detections: 3, estimate_min: 1, method: 'заглушка',
       buoys: [{ buoy_id: 'b-002', detections: 2, last_seen: ago(42) }, { buoy_id: 'b-004', detections: 1, last_seen: ago(130) }], groups: [] }),
     getModelInfo: () => ok({

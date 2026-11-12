@@ -3,18 +3,22 @@
 Буи только присылают звук, солёность и телеметрию — всё, что ниже, считает бэкенд.
 
   статус буя  → critical (лодка, выстрел, сброс) | anomaly (аномальный звук, скачок солёности) | normal
+  точка звука → слышали ≥ 3 буя: источник по разнице времени прихода (как в системах определения выстрелов)
   соседи      → какие буи рядом слышали то же самое в пределах ± NEIGHBOR_WINDOW_MIN; никто не слышал — повод
                  заподозрить ложное срабатывание
   контекст    → всё, что случилось в ± N минут вокруг события, с расстоянием и сдвигом по времени
   тюлени      → где слышно тюленей, оценка численности, куда смещается группа (центр по буям во времени)
 """
 from datetime import datetime, timedelta, timezone
+import math
 from math import atan2, cos, degrees, radians, sin
 from typing import Callable, Optional
 
 import storage
+import numpy as np
+
 from config import (ANOMALY_SALINITY_DELTA, BUOY_ONLINE_MIN, CRITICAL_LABELS, LISTEN_RADIUS_KM, NEIGHBOR_WINDOW_MIN,
-                    SALINITY_NORM, SEAL_TRACK_BINS, STATUS_WINDOW_H)
+                    SALINITY_NORM, SEAL_TRACK_BINS, SOUND_SPEED_MS, STATUS_WINDOW_H)
 
 DIRECTIONS = ["С", "СВ", "В", "ЮВ", "Ю", "ЮЗ", "З", "СЗ"]
 LABEL_RU = {"seal": "тюлень", "boat": "лодка", "gunshot": "выстрел", "anomaly": "аномальный звук"}
@@ -138,8 +142,42 @@ def sound_neighbors(event: dict, buoys: dict, distance_km: Callable) -> dict:
         })
     neighbors.sort(key=lambda n: n["distance_km"])
     verdict, message = _verdict(neighbors)
+    heard = [(origin["geo"], t)] + [(buoys[n["buoy_id"]]["geo"], t + timedelta(seconds=n["delta_sec"]))
+                                    for n in neighbors if n["heard"]]
     return {"event_id": event["event_id"], "label": label, "window_min": NEIGHBOR_WINDOW_MIN,
-            "verdict": verdict, "message": message, "neighbors": neighbors}
+            "verdict": verdict, "message": message, "neighbors": neighbors, "location": locate(heard)}
+
+
+def locate(heard: list[tuple[dict, datetime]]) -> Optional[dict]:
+    """Точка источника по разнице времени прихода звука (TDOA) на ≥ 3 буя: перебор сетки, минимум невязки.
+
+    Время событий хранится с точностью до секунды → погрешность порядка скорости звука × 1 с ≈ 1.5 км.
+    """
+    if len(heard) < 3:
+        return None
+    lat0 = sum(g["lat"] for g, _ in heard) / len(heard)
+    kx, ky = 111.32 * math.cos(math.radians(lat0)), 111.32  # км на градус
+    pts = np.array([[g["lon"] * kx, g["lat"] * ky] for g, _ in heard])
+    t0 = min(t for _, t in heard)
+    times = np.array([(t - t0).total_seconds() for _, t in heard])
+    c = SOUND_SPEED_MS / 1000  # км/с
+    span = max(np.ptp(pts[:, 0]), np.ptp(pts[:, 1])) / 2 + 30
+    cx, cy = pts[:, 0].mean(), pts[:, 1].mean()
+    best = None
+    for step in (1.0, 0.1):  # грубо, затем точно вокруг лучшей точки
+        if best is not None:
+            cx, cy, span = best[0], best[1], 3.0
+        xs = np.arange(cx - span, cx + span + step, step)
+        ys = np.arange(cy - span, cy + span + step, step)
+        gx, gy = np.meshgrid(xs, ys)
+        d = np.sqrt((gx[..., None] - pts[:, 0]) ** 2 + (gy[..., None] - pts[:, 1]) ** 2)  # км до каждого буя
+        emit = times - d / c  # момент выстрела по каждому бую: в верной точке они совпадают
+        resid = emit.std(axis=-1)
+        i = np.unravel_index(np.argmin(resid), resid.shape)
+        best = (gx[i], gy[i], float(resid[i]))
+    err_km = round(max(1.5, best[2] * SOUND_SPEED_MS / 1000 * 2), 1)
+    return {"geo": {"lat": round(best[1] / ky, 4), "lon": round(best[0] / kx, 4)}, "error_km": err_km,
+            "buoys_used": len(heard), "method": f"разница времени прихода звука, скорость звука {SOUND_SPEED_MS:.0f} м/с"}
 
 
 def water_neighbors(event: dict, buoys: dict, distance_km: Callable) -> dict:

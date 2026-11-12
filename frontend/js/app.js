@@ -519,10 +519,12 @@
       '<button class="btn danger" data-d="false">Ложная тревога</button>' +
       '<button class="btn" id="act-btn">Скачать акт (PDF)</button></div>' +
       '<div class="sub decide-note">' + (inc.decision ? 'Решение: <b>' + esc(DECISIONS[inc.decision]) + '</b>. ' : '') +
-      'Отметки «ложная тревога» — новые метки для дообучения модели (в прототипе хранятся в этом браузере).</div>';
+      'Чтобы модель училась на ваших решениях: «что было рядом →» у сигнала → «Что это на самом деле?». Разметка хранится на сервере и выгружается для дообучения.</div>';
     $('#modal').hidden = false;
     document.querySelectorAll('#modal-body [data-d]').forEach((b) => b.classList.toggle('chosen', b.dataset.d === inc.decision));
     fillModal();
+    inc.items.filter((i) => i.kind === 'sound' && !evidenceCache[i.event_id])
+      .forEach((i) => Api.getEvidence(i.event_id).then((ev) => (evidenceCache[i.event_id] = ev)).catch(() => {}));
   }
 
   // Спектрограммы и «кто ещё слышал» в открытом окне
@@ -539,9 +541,29 @@
     });
   }
 
+  // Точка выстрела: звезда, круг погрешности и лучи к буям, которые его слышали
+  const lastLocations = {};
+  const locateLayer = L.layerGroup().addTo(map);
+  function drawLocation(n) {
+    locateLayer.clearLayers();
+    const g = n.location.geo;
+    (n.neighbors || []).filter((x) => x.heard).map((x) => buoyById(x.buoy_id)).concat([buoyById((state.sound.find((e) => e.event_id === n.event_id) || {}).buoy_id)])
+      .filter(Boolean).forEach((b) => L.polyline([[b.geo.lat, b.geo.lon], [g.lat, g.lon]], { className: 'loc-ray', interactive: false }).addTo(locateLayer));
+    L.circle([g.lat, g.lon], { radius: n.location.error_km * 1000, className: 'loc-err', interactive: false }).addTo(locateLayer);
+    L.marker([g.lat, g.lon], { icon: L.divIcon({ className: '', iconSize: [0, 0], html: '<div class="loc-mk">✶</div><div class="loc-label">точка выстрела ± ' + n.location.error_km + ' км</div>' }), zIndexOffset: 1200 })
+      .addTo(locateLayer);
+    closeModal();
+    showTab('map');
+    map.setView([g.lat, g.lon], Math.max(map.getZoom(), 9));
+  }
+
   const VERDICT = { confirmed: '✓ подтверждено', unconfirmed: '⚠ не подтверждено', isolated: '— проверить нечем' };
   function neighborsHtml(n, full) {
-    const head = '<div class="verdict v-' + esc(n.verdict) + '"><b>' + esc(VERDICT[n.verdict] || n.verdict) + '</b> · ' + esc(n.message) + '</div>';
+    const loc = n.location;
+    const head = '<div class="verdict v-' + esc(n.verdict) + '"><b>' + esc(VERDICT[n.verdict] || n.verdict) + '</b> · ' + esc(n.message) + '</div>' +
+      (loc ? '<div class="locate"><b>Точка источника:</b> ' + coords(loc.geo) + ' ± ' + loc.error_km + ' км · по ' + loc.buoys_used + ' буям' +
+        ' <button class="link" data-locate="' + esc(n.event_id) + '">показать на карте →</button></div>' : '');
+    if (loc) lastLocations[n.event_id] = n;
     const list = n.neighbors || [];
     if (!full) {
       return head + '<div class="nb-chips">' + list.filter((x) => x.in_range).map((x) =>
@@ -571,6 +593,8 @@
       signalHtml(item, false) +
       '<h3>Кто ещё ' + (item.kind === 'sound' ? 'слышал' : 'фиксировал') + ' это</h3>' +
       '<div class="nbrs full" data-kind="' + item.kind + '" data-id="' + esc(item.event_id) + '">Проверяем соседние буи…</div>' +
+      (item.kind === 'sound' ? '<h3>Разметка инспектора</h3><div class="label-box" id="label-box" data-id="' + esc(item.event_id) + '"></div>' +
+        '<div class="evidence" id="evidence">Проверяем отпечаток записи…</div>' : '') +
       '<div class="ctx-head"><h3>Что происходило рядом</h3><div class="ctx-range">' +
       C.CONTEXT_MINUTES.map((m) => '<button class="ctx-btn' + (m === ctxMinutes ? ' on' : '') + '" data-ctx="' + m + '">±' + m + ' мин</button>').join('') +
       '</div></div><div class="ctx" id="ctx">Загружаем события вокруг…</div>' +
@@ -579,7 +603,37 @@
     ctxItem = item;
     fillModal();
     loadContext();
+    if (item.kind === 'sound') { loadLabel(item); loadEvidence(item.event_id); }
   }
+
+  // Инспектор подтверждает или исправляет класс → запись уходит в дообучение (PUT …/label)
+  const TRUE_CLASSES = [['seal', 'Тюлень'], ['boat', 'Лодка'], ['gunshot', 'Выстрел'], ['background', 'Фон, шум'], ['anomaly', 'Другой звук']];
+  async function loadLabel(item) {
+    const box = $('#label-box');
+    if (!box) return;
+    let cur = {};
+    try { cur = await Api.getLabel(item.event_id); } catch (e) { /* без разметки */ }
+    const model = item.classification.label;
+    box.innerHTML = '<div class="sub">Модель: <b>' + esc(soundName(model)) + '</b> ' + pct(item.classification.confidence) + '. Что это на самом деле?</div>' +
+      '<div class="label-btns">' + TRUE_CLASSES.map(([k, v]) =>
+        '<button class="ctx-btn' + (cur.label === k ? ' on' : '') + '" data-label="' + k + '">' + (k === model ? '✓ ' : '') + v + '</button>').join('') + '</div>' +
+      '<div class="sub">' + (cur.label ? 'Размечено: ' + esc(TRUE_CLASSES.find((c) => c[0] === cur.label)[1]) + ' · ' + fmtTime(cur.labeled_at) +
+        '. Запись войдёт в следующее дообучение модели.' : 'Решение инспектора сохраняется на сервере и становится обучающим примером.') + '</div>';
+  }
+
+  async function loadEvidence(id) {
+    const box = $('#evidence');
+    if (!box) return;
+    try {
+      const e = await Api.getEvidence(id);
+      evidenceCache[id] = e;
+      box.innerHTML = '<span class="' + (e.intact ? 'ok' : 'bad') + '">' + (e.intact ? '✓ Запись не изменялась с момента приёма' : '⚠ Файл не совпадает с отпечатком') + '</span>' +
+        '<code title="SHA-256">SHA-256 ' + esc((e.sha256 || '—').slice(0, 16)) + '…</code>';
+    } catch (err) {
+      box.textContent = 'Отпечаток недоступен';
+    }
+  }
+  const evidenceCache = {};
 
   // Общая картина: все события на всех буях в ± N минут вокруг выбранного (GET …/context)
   let ctxMinutes = C.CONTEXT_MINUTES[1], ctxItem = null;
@@ -665,6 +719,14 @@
       openIncident(id);
     }
     if (e.target.id === 'act-btn' && openId) printAct(openId);
+    const lb = e.target.closest('[data-label]');
+    if (lb && $('#label-box')) {
+      const id = $('#label-box').dataset.id, item = allItems().find((x) => x.kind === 'sound' && x.event_id === id);
+      Api.putLabel(id, lb.dataset.label).then(() => { if (item) loadLabel(item); toast('info', 'Разметка сохранена', 'Запись войдёт в дообучение модели'); })
+        .catch((err) => toast('info', 'Не сохранилось', err.message));
+    }
+    const lc = e.target.closest('[data-locate]');
+    if (lc && lastLocations[lc.dataset.locate]) drawLocation(lastLocations[lc.dataset.locate]);
     const incBtn = e.target.closest('[data-inc]');
     if (incBtn) openIncident(incBtn.dataset.inc);
     const ctxBtn = e.target.closest('[data-ctx]');
@@ -689,7 +751,8 @@
       const img = i.kind === 'water' && i.source && i.source.image_id ? '<img class="sat" src="' + esc(Api.imageUrl(i.source.image_id)) + '">' : '';
       return '<tr><td>' + fmtTime(i.timestamp) + '</td><td>' + esc(itemName(i)) + '</td><td>' + pct(itemConf(i)) + '</td>' +
         '<td>' + esc(itemBuoy(i) ? buoyName(itemBuoy(i)) : 'спутник') + '<br>' + coords(itemGeo(i)) + '</td>' +
-        '<td>' + esc(i.event_id) + (i.kind === 'sound' ? '<br><small>' + esc(Api.audioUrl(i)) + '</small>' : '') + spec + img + '</td></tr>';
+        '<td>' + esc(i.event_id) + (i.kind === 'sound' ? '<br><small>' + esc(Api.audioUrl(i)) + '</small>' +
+          (evidenceCache[i.event_id] ? '<br><small>SHA-256: <code>' + esc(evidenceCache[i.event_id].sha256) + '</code></small>' : '') : '') + spec + img + '</td></tr>';
     }).join('');
     w.document.write('<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>Акт ' + esc(inc.id) + '</title><style>' +
       'body{font:13px/1.45 system-ui,sans-serif;color:#111;margin:24px}h1{font-size:18px;margin:0 0 4px}table{border-collapse:collapse;width:100%;margin-top:12px}' +
@@ -1006,8 +1069,10 @@
   async function loadAbout() {
     const box = $('#about');
     let info = null;
+    let labels = null;
     try { info = await Api.getModelInfo(); } catch (e) { /* покажем без метрик */ }
-    const s = (info && info.sound) || {}, f = (info && info.forecast) || {};
+    try { labels = await Api.getLabels(); } catch (e) { /* без разметки */ }
+    const s = (info && info.sound) || {}, f = (info && info.forecast) || {}, ev = s.evaluation || {};
     const num = (x, d) => (typeof x === 'number' ? x.toFixed(d === undefined ? 2 : d) : '—');
     const marks = Object.values(state.decisions);
     box.innerHTML =
@@ -1025,9 +1090,18 @@
       '</div>' +
       '<p class="sub">Прототип буя — Android-телефон с микрофоном: он записывает звук и отправляет его в <code>/api/v1/classify/upload</code>. В демо поток событий даёт эмулятор буя.</p>' +
       '<div class="about-grid">' +
-      card('Модель звука', 'Градиентный бустинг по 13 MFCC после подводного фильтра. Классы: тюлень, лодка, выстрел, аномалия, фон. Уверенность ниже ' + pct(s.anomaly_threshold) + ' → «аномалия».',
-        [['Accuracy', pct(s.accuracy)], ['F1 (macro)', num(s.f1_macro)], ['Precision / Recall', num(s.precision_macro) + ' / ' + num(s.recall_macro)],
-         ['Кросс-валидация F1', num(s.cv_f1_mean) + ' ± ' + num(s.cv_f1_std)], ['Тестовых записей', s.n_samples || '—']]) +
+      (s.feature_version >= 2
+        ? card('Модель звука v2', 'Градиентный бустинг по ' + s.n_features + ' признакам: MFCC с разбросом и динамикой, форма спектра, огибающая (импульс выстрела). Обучена на двух генераторах звуков с шумом моря, дальностью и частотой дискретизации телефона.',
+            [['На «чужом» генераторе: было → стало', pct((ev.v1_cross_generator || {}).accuracy) + ' → ' + pct((ev.v2_cross_generator || {}).accuracy)],
+             ['Шумный тест (SNR 0–10 дБ)', pct(s.accuracy) + ', F1 ' + num(s.f1_macro)],
+             ['Файлы эмулятора', ev.emulator_files ? ev.emulator_files.correct + ' из ' + ev.emulator_files.total : '—'],
+             ['Кросс-валидация F1', num(s.cv_f1_mean) + ' ± ' + num(s.cv_f1_std)], ['Обучающих примеров', s.n_train || '—']])
+        : card('Модель звука', 'Градиентный бустинг по 13 MFCC после подводного фильтра.',
+            [['Accuracy', pct(s.accuracy)], ['F1 (macro)', num(s.f1_macro)], ['Тестовых записей', s.n_samples || '—']])) +
+      card('Модель в поле', 'Каждое решение инспектора «что это на самом деле» сохраняется на сервере. Это и реальная точность модели, и новые обучающие примеры: архив выгружается для дообучения.',
+        [['Размечено инспекторами', labels ? labels.total : '—'],
+         ['Модель угадала', labels && labels.total ? labels.model_correct + ' (' + pct(labels.field_accuracy) + ')' : 'пока нет разметки'],
+         ['Выгрузка для дообучения', '<a href="' + esc(Api.labelsExportUrl()) + '">labels.zip</a>']], true) +
       card('Прогноз тюленя', 'Градиентный бустинг: день года, широта, температура воздуха, ветер, детекции тюленя и угроз за 7 дней. Погода — Open-Meteo.',
         [['ROC AUC', num(f.roc_auc, 3)], ['Brier', num(f.brier, 3)], ['Обучающих примеров', f.samples || '—'], ['Данные', f.data === 'synthetic' ? 'синтетика' : f.data || '—']]) +
       card('Слияние источников', 'Сигналы ближе ' + C.INCIDENT_WINDOW_MIN + ' мин и ' + C.INCIDENT_RADIUS_KM + ' км — один инцидент. Слышали ≥2 буя или совпали буй и спутник — «подтверждено». Так меньше ложных тревог.',
@@ -1035,7 +1109,7 @@
       '</div>' +
       '<h2>Ограничения (честно)</h2><ul class="limits">' +
       '<li>Модели обучены на синтетических данных; размеченных записей по Каспию в открытом доступе нет. Следующий шаг — записи с буя и отметки инспекторов.</li>' +
-      '<li>Метрики звука посчитаны на ' + (s.n_samples || 'небольшой') + ' тестовых записях того же генератора — на реальном звуке они будут ниже.</li>' +
+      '<li>Метрики звука — на синтетике двух генераторов; проверка «обучили на одном, проверили на другом» ближе всего к реальности, но не заменяет записей с моря. Реальную точность покажет разметка инспекторов.</li>' +
       '<li>Снимки анализируются правилом по цвету, не обученной моделью.</li>' +
       '<li>Границы ООПТ на карте схематичные; радиус слышимости буя — допущение (задаётся в buoys.json).</li>' +
       '</ul>';
@@ -1072,8 +1146,8 @@
     requestAnimationFrame(frame);
   }
   const step = (t, d) => '<div class="pipe-step"><b>' + esc(t) + '</b><span>' + esc(d) + '</span></div>';
-  const card = (t, d, rows) => '<div class="about-card"><h3>' + esc(t) + '</h3><p>' + esc(d) + '</p><dl class="kv">' +
-    rows.map(([k, v]) => '<dt>' + esc(k) + '</dt><dd>' + esc(v) + '</dd>').join('') + '</dl></div>';
+  const card = (t, d, rows, html) => '<div class="about-card"><h3>' + esc(t) + '</h3><p>' + esc(d) + '</p><dl class="kv">' +
+    rows.map(([k, v]) => '<dt>' + esc(k) + '</dt><dd>' + (html ? v : esc(v)) + '</dd>').join('') + '</dl></div>';
 
   // ---------- гибель тюленей: находки туш и расследование ----------
   // Туши находят через дни после гибели — причину уже не установить. Бэкенд восстанавливает обратный дрейф
