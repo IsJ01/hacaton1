@@ -1,0 +1,11 @@
+fastapi>=0.110
+uvicorn>=0.29
+python-multipart>=0.0.9
+pillow>=10.0
+# версии ниже — как в ml/requirements.txt, чтобы classifier.pkl загружался без сюрпризов
+numpy==1.26.4
+scipy==1.14.1
+soundfile==0.12.1
+librosa==0.10.2.post1
+scikit-learn==1.5.2
+joblib==1.4.2
