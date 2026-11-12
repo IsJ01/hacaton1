@@ -178,6 +178,10 @@
         salinity: 12.5, water_temp_c: 11.2 - 0.25 * i, level_m: -28.9, telemetry_at: ago(3) };
     }) }),
     getNeighbors: (kind, id) => ok({ event_id: id, verdict: 'isolated', message: 'В режиме заглушек соседи не считаются', neighbors: [] }),
+    getEvent: (id) => { const e = SOUND_EVENTS.find((x) => x.event_id === id); return e ? ok(e) : notFound(); },
+    getWaterEvent: (id) => { const e = WATER_EVENTS.find((x) => x.event_id === id); return e ? ok(e) : notFound(); },
+    getContext: (kind, id, minutes) => ok({ event_id: id, kind, window_min: minutes, total: 0, counts: {}, buoys: [],
+      items: [{ kind, event_id: id, label: 'boat', confidence: 0.9, buoy_id: 'b-001', delta_sec: 0, distance_km: 0, is_origin: true }] }),
     getSeals: () => ok({ generated_at: ago(0), window_h: 24, total_detections: 3, estimate_min: 1, method: 'заглушка',
       buoys: [{ buoy_id: 'b-002', detections: 2, last_seen: ago(42) }, { buoy_id: 'b-004', detections: 1, last_seen: ago(130) }], groups: [] }),
     getModelInfo: () => ok({

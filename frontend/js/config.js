@@ -46,6 +46,7 @@ window.CONFIG = {
   TILE_ATTRIBUTION: 'Tiles &copy; Esri &mdash; GEBCO, NOAA, Garmin',
   TILE_MAX_ZOOM: 13,
   LISTEN_RADIUS_KM: 25,      // круг слышимости, пока бэкенд не прислал свой (buoys.json → listen_radius_km)
+  CONTEXT_MINUTES: [2, 5, 15],  // окна «что происходило рядом» в окне события
   SEAL_WINDOW_H: 24,         // окно для слоя тюленей (GET /api/v1/seals?hours=)
   PLACES: [                  // свои подписи на карте вместо подписей подложки
     { name: 'Махачкала', lat: 42.98, lon: 47.47 },

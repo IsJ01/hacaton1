@@ -567,9 +567,64 @@
       signalHtml(item, false) +
       '<h3>Кто ещё ' + (item.kind === 'sound' ? 'слышал' : 'фиксировал') + ' это</h3>' +
       '<div class="nbrs full" data-kind="' + item.kind + '" data-id="' + esc(item.event_id) + '">Проверяем соседние буи…</div>' +
+      '<div class="ctx-head"><h3>Что происходило рядом</h3><div class="ctx-range">' +
+      C.CONTEXT_MINUTES.map((m) => '<button class="ctx-btn' + (m === ctxMinutes ? ' on' : '') + '" data-ctx="' + m + '">±' + m + ' мин</button>').join('') +
+      '</div></div><div class="ctx" id="ctx">Загружаем события вокруг…</div>' +
       (inc ? '<div class="decide"><button class="btn primary" data-inc="' + esc(inc.id) + '">Открыть инцидент: ' + esc(inc.title) + '</button></div>' : '');
     $('#modal').hidden = false;
+    ctxItem = item;
     fillModal();
+    loadContext();
+  }
+
+  // Общая картина: все события на всех буях в ± N минут вокруг выбранного (GET …/context)
+  let ctxMinutes = C.CONTEXT_MINUTES[1], ctxItem = null;
+  async function loadContext() {
+    const box = $('#ctx');
+    if (!box || !ctxItem) return;
+    try {
+      renderContext(box, await Api.getContext(ctxItem.kind, ctxItem.event_id, ctxMinutes));
+    } catch (e) {
+      box.innerHTML = '<span class="err-text">Не удалось загрузить: ' + esc(e.message) + '</span>';
+    }
+  }
+
+  function renderContext(box, d) {
+    const W = d.window_min * 60;
+    const name = (it) => (it.kind === 'sound' ? soundName(it.label) : waterName(it.label));
+    const dt = (sec) => (sec === 0 ? '0 с' : (sec > 0 ? '+' : '−') + (Math.abs(sec) >= 60 ? Math.floor(Math.abs(sec) / 60) + ' мин ' + (Math.abs(sec) % 60) + ' с' : Math.abs(sec) + ' с'));
+    // лента времени: точки событий по горизонтали от −N до +N минут, по строке на буй
+    const rows = Array.from(new Set(d.items.map((i) => i.buoy_id || 'спутник'))).sort();
+    const rowH = 22, H = rows.length * rowH + 22;
+    const x = (sec) => (20 + ((sec + W) / (2 * W)) * 76).toFixed(2) + '%'; // слева 20% — подписи буёв
+    const lane = (i) => rows.indexOf(i.buoy_id || 'спутник');
+    const timeline =
+      '<div class="tl" style="height:' + H + 'px">' +
+      rows.map((r, k) => '<div class="tl-row" style="top:' + (k * rowH) + 'px"><span>' + esc(r === 'спутник' ? r : buoyName(r)) + '</span></div>').join('') +
+      '<div class="tl-now" style="left:' + x(0) + '"></div>' +
+      d.items.map((i) => '<button class="tl-dot ' + esc(i.label) + (i.is_origin ? ' origin' : '') + '" style="left:' + x(i.delta_sec) + ';top:' + (lane(i) * rowH + 4) + 'px" title="' +
+        esc(name(i) + ' · ' + (i.buoy_id ? buoyName(i.buoy_id) : 'спутник') + ' · ' + dt(i.delta_sec)) + '" data-ev-kind="' + i.kind + '" data-ev-id="' + esc(i.event_id) + '"></button>').join('') +
+      '<div class="tl-axis" style="top:' + (rows.length * rowH + 2) + 'px"><span style="left:' + x(-W) + '">−' + d.window_min + ' мин</span><span style="left:' + x(0) + '">это событие</span><span style="left:' + x(W) + '">+' + d.window_min + ' мин</span></div>' +
+      '</div>';
+    const summary = d.total
+      ? 'Ещё ' + d.total + ' событ. на ' + d.buoys.length + ' буях: ' + Object.entries(d.counts).map(([l, n]) => esc(l in C.SOUND_LABELS ? soundName(l) : waterName(l)) + ' ×' + n).join(', ')
+      : 'В этом окне больше ничего не происходило — событие одиночное.';
+    const list = d.items.map((i) =>
+      '<tr class="' + (i.is_origin ? 'origin' : '') + '" data-ev-kind="' + i.kind + '" data-ev-id="' + esc(i.event_id) + '">' +
+      '<td>' + dt(i.delta_sec) + '</td><td><span class="badge sm ' + esc(i.label) + '">' + esc(name(i)) + '</span> ' + (i.confidence != null ? pct(i.confidence) : '') + '</td>' +
+      '<td>' + esc(i.buoy_id ? buoyName(i.buoy_id) : i.source || '—') + (i.same_buoy && !i.is_origin ? ' <span class="sub">тот же буй</span>' : '') + '</td>' +
+      '<td>' + (i.is_origin ? '—' : i.distance_km != null ? i.distance_km + ' км' : '—') + '</td></tr>').join('');
+    box.innerHTML = '<div class="ctx-sum">' + summary + '</div>' + timeline +
+      '<table class="nb-table ctx-table"><thead><tr><th>Время</th><th>Что</th><th>Где</th><th>Расстояние</th></tr></thead><tbody>' + list + '</tbody></table>';
+  }
+
+  async function openEventById(kind, id) {
+    try {
+      const ev = kind === 'water' ? await Api.getWaterEvent(id) : await Api.getEvent(id);
+      openEvent(Object.assign({ kind }, ev));
+    } catch (e) {
+      toast('info', 'Событие не открылось', e.message);
+    }
   }
 
   function signalHtml(i, withNeighbors) {
@@ -578,7 +633,8 @@
       const c = i.classification || {};
       const cands = (c.candidates || []).map((x) => esc(soundName(x.label)) + ' ' + pct(x.confidence)).join(' · ');
       return '<div class="signal"><div class="ev-head"><span class="badge ' + esc(c.label) + '">' + esc(soundName(c.label)) + '</span>' +
-        '<span class="conf">' + pct(c.confidence) + '</span><span class="sub">' + esc(buoyName(i.buoy_id)) + '</span><time>' + fmtTime(i.timestamp) + '</time></div>' +
+        '<span class="conf">' + pct(c.confidence) + '</span><span class="sub">' + esc(buoyName(i.buoy_id)) + '</span><time>' + fmtTime(i.timestamp) + '</time>' +
+        (withNeighbors === false ? '' : '<button class="link" data-ev-kind="sound" data-ev-id="' + esc(i.event_id) + '">что было рядом →</button>') + '</div>' +
         (cands ? '<div class="cands">Модель: ' + cands + '</div>' : '') +
         '<canvas class="spec" width="560" height="110" data-src="' + esc(Api.audioUrl(i)) + '"></canvas><div class="sub spec-cap">Спектрограмма…</div>' +
         '<audio controls preload="none" src="' + esc(Api.audioUrl(i)) + '"></audio>' + nb + '</div>';
@@ -607,6 +663,14 @@
     if (e.target.id === 'act-btn' && openId) printAct(openId);
     const incBtn = e.target.closest('[data-inc]');
     if (incBtn) openIncident(incBtn.dataset.inc);
+    const ctxBtn = e.target.closest('[data-ctx]');
+    if (ctxBtn) {
+      ctxMinutes = +ctxBtn.dataset.ctx;
+      document.querySelectorAll('.ctx-btn').forEach((b) => b.classList.toggle('on', b === ctxBtn));
+      loadContext();
+    }
+    const evLink = e.target.closest('[data-ev-id]');
+    if (evLink && !evLink.classList.contains('origin')) openEventById(evLink.dataset.evKind, evLink.dataset.evId);
   });
 
   // Акт фиксации: печатная страница → «Сохранить как PDF»
@@ -942,6 +1006,10 @@
     const num = (x, d) => (typeof x === 'number' ? x.toFixed(d === undefined ? 2 : d) : '—');
     const marks = Object.values(state.decisions);
     box.innerHTML =
+      '<div class="hero"><canvas id="hero-dots"></canvas><div class="hero-text">' +
+      '<h2>Каждый звук моря —<br>под наблюдением</h2>' +
+      '<p>Буи слушают воду, модель узнаёт лодку, выстрел и тюленя, а система сводит сигналы с разных датчиков в один инцидент для инспектора.</p>' +
+      '</div></div>' +
       '<h2>Как это работает</h2>' +
       '<div class="pipe">' +
       step('Буй', 'гидрофон, датчик солёности, GPS, солнечная панель') +
@@ -964,8 +1032,39 @@
       '<li>Модели обучены на синтетических данных; размеченных записей по Каспию в открытом доступе нет. Следующий шаг — записи с буя и отметки инспекторов.</li>' +
       '<li>Метрики звука посчитаны на ' + (s.n_samples || 'небольшой') + ' тестовых записях того же генератора — на реальном звуке они будут ниже.</li>' +
       '<li>Снимки анализируются правилом по цвету, не обученной моделью.</li>' +
-      '<li>Границы ООПТ и радиус слышимости на карте схематичные; уровень и температура воды в карточках — демо-данные.</li>' +
+      '<li>Границы ООПТ на карте схематичные; радиус слышимости буя — допущение (задаётся в buoys.json).</li>' +
       '</ul>';
+    heroDots();
+  }
+  // Поле цветных точек-волн в тёмном блоке; останавливается, когда вкладка скрыта
+  function heroDots() {
+    const cv = $('#hero-dots');
+    if (!cv) return;
+    const g = cv.getContext('2d'), dpr = window.devicePixelRatio || 1;
+    const t0 = performance.now();
+    function frame(now) {
+      if (!cv.isConnected || $('#panel-about').hidden) return;
+      const w = cv.clientWidth, h = cv.clientHeight;
+      if (cv.width !== w * dpr) { cv.width = w * dpr; cv.height = h * dpr; }
+      g.setTransform(dpr, 0, 0, dpr, 0, 0);
+      g.clearRect(0, 0, w, h);
+      const t = (now - t0) / 1000, step = 14;
+      for (let x = 0; x < w; x += step) {
+        for (let y = 0; y < h; y += step) {
+          const k = x / w;
+          const wave = Math.sin(x * 0.012 + t * 0.8) * 0.5 + Math.sin(y * 0.02 - t * 0.6 + k * 4) * 0.5;
+          const a = Math.max(0, wave) * (0.25 + 0.75 * k);
+          if (a < 0.05) continue;
+          const r = Math.round(66 + 120 * k), gr = Math.round(133 - 40 * k + 60 * Math.sin(t + y * 0.01)), b = 244 - Math.round(20 * k);
+          g.fillStyle = 'rgba(' + r + ',' + gr + ',' + b + ',' + a.toFixed(2) + ')';
+          g.beginPath();
+          g.arc(x + Math.sin(t + y * 0.05) * 2, y, 1.1 + a * 1.4, 0, Math.PI * 2);
+          g.fill();
+        }
+      }
+      requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
   }
   const step = (t, d) => '<div class="pipe-step"><b>' + esc(t) + '</b><span>' + esc(d) + '</span></div>';
   const card = (t, d, rows) => '<div class="about-card"><h3>' + esc(t) + '</h3><p>' + esc(d) + '</p><dl class="kv">' +

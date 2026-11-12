@@ -5,7 +5,7 @@
 #   bash docker.sh mock     — мок основного бэкенда на :8001 (для проверки, пока нет настоящего)
 #   bash docker.sh logs     — логи эмулятора   (bash docker.sh logs mock — логи мока)
 #   bash docker.sh stop     — остановить всё
-# Настройки: BACKEND_URL=http://localhost:8001  PORT=8000  MOCK_PORT=8001
+# Настройки: BACKEND_URL=http://localhost:8001  PORT=8000  MOCK_PORT=8001  AUTO_HISTORY=1 (пустой бэкенд → история за сутки)
 #   пример: BACKEND_URL=http://192.168.1.50:8001 bash docker.sh
 set -e
 cd "$(dirname "$0")"
@@ -23,7 +23,7 @@ case "${1:-up}" in
     docker rm -f "$EMU" >/dev/null 2>&1 || true
     # sounds/ и sat_library/ подключены папками: новые файлы видны без пересборки
     docker run -d --name "$EMU" --network host \
-      -e BACKEND_URL="$BACKEND_URL" \
+      -e BACKEND_URL="$BACKEND_URL" -e AUTO_HISTORY="${AUTO_HISTORY:-1}" \
       -v "$PWD/sounds:/app/sounds" -v "$PWD/sat_library:/app/sat_library" \
       "$IMAGE" uvicorn emulator:app --host 0.0.0.0 --port "$PORT" >/dev/null
     echo "Эмулятор буя: http://localhost:$PORT/docs  →  шлёт на $BACKEND_URL"

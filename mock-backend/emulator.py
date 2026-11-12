@@ -6,8 +6,10 @@
   POST /send/salinity  — буй + уровень солёности → POST {BACKEND}/api/v1/salinity
   POST /send/satellite — снимок из sat_library/ + координаты → POST {BACKEND}/api/v1/satellite
   POST /send/telemetry — температура воды и уровень → POST {BACKEND}/api/v1/telemetry
-  POST /scenario/history — заготовленные сутки работы пяти буёв (scenarios.py) → на бэкенд
-  POST /scenario/poacher — живой сценарий «браконьер» по шагам; ход — GET /scenario/status
+  /scenario/history    — заготовленные сутки работы пяти буёв (scenarios.py) → на бэкенд
+  /scenario/poacher    — живой сценарий «браконьер» по шагам; ход — GET /scenario/status
+                          (оба работают и как GET: достаточно открыть адрес в браузере)
+  При запуске: если на бэкенде пусто — эмулятор сам отправляет историю за сутки (AUTO_HISTORY=0 — не надо).
   POST /check          — проверка, что бэкенд принимает и сохраняет данные буя
   GET  /sounds, /images — что лежит в папках (с порядковыми номерами)
   GET  /buoys          — буи с бэкенда
@@ -40,6 +42,7 @@ BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8001").rstrip("/")
 AUDIO_EXT = {".wav", ".mp3", ".ogg", ".flac", ".m4a", ".aac", ".webm"}
 IMAGE_EXT = {".jpg", ".jpeg", ".png"}
 LOG: deque = deque(maxlen=200)
+AUTO_HISTORY = os.getenv("AUTO_HISTORY", "1") == "1"  # пустой бэкенд при старте → отправить историю за сутки
 
 
 def now_iso() -> str:
@@ -114,6 +117,8 @@ async def send(kind: str, path: str, sent: dict, **kwargs) -> JSONResponse:
 async def lifespan(app: FastAPI):
     app.state.http = httpx.AsyncClient(timeout=30)
     print(f"Эмулятор буя: звуков в sounds/ — {len(list_files(SOUNDS, AUDIO_EXT))}, отправка на {BACKEND_URL}")
+    if AUTO_HISTORY:
+        asyncio.create_task(auto_history())
     yield
     await app.state.http.aclose()
 
@@ -269,11 +274,48 @@ def summarize(results: list[tuple[dict, Optional[int], object]]) -> dict:
             "model_mismatches": mismatches, "water_events_created": dict(created), "errors": errors}
 
 
-@app.post("/scenario/history", tags=["сценарии"],
-          summary="Заготовленные сутки работы буёв → на бэкенд (звук, солёность, телеметрия, снимки)")
-async def scenario_history(hours: int = Query(24, ge=1, le=24, description="За сколько последних часов")):
+async def backend_event_count() -> Optional[int]:
+    """Сколько звуковых событий уже есть на бэкенде (None — бэкенд не отвечает)."""
+    try:
+        r = await app.state.http.get(BACKEND_URL + "/api/v1/events?limit=1", timeout=5)
+        return r.json().get("total") if r.status_code == 200 else None
+    except (httpx.HTTPError, ValueError):
+        return None
+
+
+async def auto_history():
+    """После старта ждём бэкенд (до 3 минут) и, если он пустой, отправляем историю за сутки."""
+    for _ in range(90):
+        total = await backend_event_count()
+        if total is not None:
+            if total == 0:
+                print("[auto] бэкенд пустой — отправляю историю за сутки")
+                await send_history(24)
+            else:
+                print(f"[auto] на бэкенде уже {total} событий — историю не отправляю")
+            return
+        await asyncio.sleep(2)
+    print(f"[auto] бэкенд {BACKEND_URL} так и не ответил — историю не отправил")
+
+
+@app.api_route("/scenario/history", methods=["GET", "POST"], tags=["сценарии"],
+               summary="Заготовленные сутки работы буёв → на бэкенд (звук, солёность, телеметрия, снимки)")
+async def scenario_history(hours: int = Query(24, ge=1, le=24, description="За сколько последних часов"),
+                           force: bool = Query(False, description="Отправить, даже если на бэкенде уже есть данные")):
     """Отправляет на бэкенд сутки данных с прошлыми метками времени — обычными запросами по контракту.
-    Повторный запуск добавит данные ещё раз; начать с чистого листа — `bash docker.sh reset` в backend/."""
+    Если данные на бэкенде уже есть, ничего не делает (иначе история задвоится) — разве что `force=true`.
+    Начать с чистого листа — `bash docker.sh reset` в backend/."""
+    total = await backend_event_count()
+    if total is None:
+        return error(502, "backend_unavailable", f"Cannot reach backend at {BACKEND_URL}")
+    if total and not force:
+        return {"backend_url": BACKEND_URL, "sent": False, "events_on_backend": total,
+                "message": "На бэкенде уже есть данные — история не отправлена, чтобы не задвоить. "
+                           "Добавить всё равно: ?force=true. С чистого листа: bash docker.sh reset в backend/."}
+    return await send_history(hours)
+
+
+async def send_history(hours: int) -> JSONResponse:
     steps = scenarios.history_steps(hours)
     now = datetime.now(timezone.utc)
     sem = asyncio.Semaphore(8)
@@ -289,14 +331,15 @@ async def scenario_history(hours: int = Query(24, ge=1, le=24, description="За
     report = summarize(results)
     ok = all(v.get("failed", 0) == 0 for v in report["by_kind"].values())
     print(f"[history] отправлено {len(steps)} → " + ", ".join(f"{k}: {v}" for k, v in report["by_kind"].items()))
-    return JSONResponse(status_code=200 if ok else 502, content={"backend_url": BACKEND_URL, "hours": hours,
+    return JSONResponse(status_code=200 if ok else 502, content={"backend_url": BACKEND_URL, "hours": hours, "sent": True,
                                                                  "all_accepted": ok, **report})
 
 
 SCENARIO = {"running": False, "started_at": None, "steps": []}
 
 
-@app.post("/scenario/poacher", tags=["сценарии"], summary="Живой сценарий «браконьер»: шаги с паузами, ~30 с")
+@app.api_route("/scenario/poacher", methods=["GET", "POST"], tags=["сценарии"],
+               summary="Живой сценарий «браконьер»: шаги с паузами, ~30 с")
 async def scenario_poacher():
     duration = sum(s["pause"] for s in scenarios.POACHER)
     if SCENARIO["running"]:

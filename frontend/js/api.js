@@ -36,6 +36,12 @@
     getBuoyStatus: () => request('/api/v1/buoy-status'),
     // GET /api/v1/events/{id}/neighbors или /api/v1/water-events/{id}/neighbors → { verdict, message, neighbors }
     getNeighbors: (kind, id) => request((kind === 'water' ? '/api/v1/water-events/' : '/api/v1/events/') + encodeURIComponent(id) + '/neighbors'),
+    // GET /api/v1/events/{id}, /api/v1/water-events/{id}
+    getEvent: (id) => request('/api/v1/events/' + encodeURIComponent(id)),
+    getWaterEvent: (id) => request('/api/v1/water-events/' + encodeURIComponent(id)),
+    // GET …/{id}/context?minutes= → { total, counts, buoys, items: [{ kind, event_id, label, delta_sec, distance_km, … }] }
+    getContext: (kind, id, minutes) =>
+      request((kind === 'water' ? '/api/v1/water-events/' : '/api/v1/events/') + encodeURIComponent(id) + '/context' + query({ minutes })),
     // GET /api/v1/seals → { total_detections, estimate_min, buoys, groups: [{ center, drift, track, … }] }
     getSeals: (params) => request('/api/v1/seals' + query(params)),
     // GET /api/v1/model-info → { sound, forecast, library_size } (сверх контракта)

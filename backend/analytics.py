@@ -5,6 +5,7 @@
   статус буя  → critical (лодка, выстрел, сброс) | anomaly (аномальный звук, скачок солёности) | normal
   соседи      → какие буи рядом слышали то же самое в пределах ± NEIGHBOR_WINDOW_MIN; никто не слышал — повод
                  заподозрить ложное срабатывание
+  контекст    → всё, что случилось в ± N минут вокруг события, с расстоянием и сдвигом по времени
   тюлени      → где слышно тюленей, оценка численности, куда смещается группа (центр по буям во времени)
 """
 from datetime import datetime, timedelta, timezone
@@ -163,6 +164,45 @@ def water_neighbors(event: dict, buoys: dict, distance_km: Callable) -> dict:
     return {"event_id": event["event_id"], "label": event["type"], "window_min": 60,
             "verdict": verdict, "message": message.replace("слышали", "фиксировали"),
             "neighbors": neighbors}
+
+
+# ---------- контекст события: что происходило рядом по времени ----------
+def context(kind: str, event: dict, buoys: dict, distance_km: Callable, minutes: float) -> dict:
+    """Все звуковые и водные события в ± minutes вокруг события — общая картина для инспектора."""
+    if kind == "sound":
+        origin_buoy = event.get("buoy_id")
+        origin_geo = buoys[origin_buoy]["geo"] if origin_buoy in buoys else None
+    else:
+        origin_buoy, origin_geo = event["source"]["buoy_id"], event["geo"]
+    t = _ts(event["timestamp"])
+    lo, hi = _iso(t - timedelta(minutes=minutes)), _iso(t + timedelta(minutes=minutes))
+    _, sounds = storage.list_sound_events(None, None, lo, hi, 500, 0)
+    _, water = storage.list_water_events(None, lo, hi, 500, 0)
+
+    items = []
+    for e in sounds:
+        geo = buoys[e["buoy_id"]]["geo"] if e["buoy_id"] in buoys else None
+        items.append({"kind": "sound", "event_id": e["event_id"], "timestamp": e["timestamp"],
+                      "label": e["classification"]["label"], "confidence": e["classification"]["confidence"],
+                      "buoy_id": e["buoy_id"], "geo": geo})
+    for w in water:
+        items.append({"kind": "water", "event_id": w["event_id"], "timestamp": w["timestamp"], "label": w["type"],
+                      "confidence": w["details"]["confidence"], "buoy_id": w["source"]["buoy_id"], "geo": w["geo"],
+                      "source": "спутник" if w["source"]["image_id"] else "датчик"})
+    for it in items:
+        it["delta_sec"] = round((_ts(it["timestamp"]) - t).total_seconds())
+        it["distance_km"] = round(distance_km(origin_geo, it["geo"]), 1) if origin_geo and it["geo"] else None
+        it["same_buoy"] = bool(origin_buoy) and it["buoy_id"] == origin_buoy
+        it["is_origin"] = it["event_id"] == event["event_id"]
+    items.sort(key=lambda i: i["delta_sec"])
+
+    others = [i for i in items if not i["is_origin"]]
+    counts: dict[str, int] = {}
+    for i in others:
+        counts[i["label"]] = counts.get(i["label"], 0) + 1
+    near_buoys = sorted({i["buoy_id"] for i in others if i["buoy_id"]})
+    return {"event_id": event["event_id"], "kind": kind, "timestamp": event["timestamp"], "window_min": minutes,
+            "origin_buoy": origin_buoy, "total": len(others), "counts": counts, "buoys": near_buoys, "items": items}
 
 
 # ---------- тюлени ----------

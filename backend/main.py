@@ -570,6 +570,24 @@ def get_water_event_neighbors(event_id: str):
     return analytics.water_neighbors(ev, BUOYS, distance_km)
 
 
+@app.get("/api/v1/events/{event_id}/context", responses=NOT_FOUND, tags=["analytics"],
+         summary="Что происходило в ± minutes вокруг звукового события (все буи, звук и вода)")
+def get_event_context(event_id: str, minutes: float = Query(5, ge=1, le=120)):
+    ev = storage.get_sound_event(event_id)
+    if not ev:
+        raise ApiError(404, "not_found", "Event not found")
+    return analytics.context("sound", ev, BUOYS, distance_km, minutes)
+
+
+@app.get("/api/v1/water-events/{event_id}/context", responses=NOT_FOUND, tags=["analytics"],
+         summary="Что происходило в ± minutes вокруг события воды")
+def get_water_event_context(event_id: str, minutes: float = Query(5, ge=1, le=120)):
+    ev = storage.get_water_event(event_id)
+    if not ev:
+        raise ApiError(404, "not_found", "Water event not found")
+    return analytics.context("water", ev, BUOYS, distance_km, minutes)
+
+
 @app.get("/api/v1/seals", tags=["analytics"], summary="Тюлени: где слышны, оценка численности, куда дрейфуют")
 def get_seals(hours: float = Query(SEAL_WINDOW_H, ge=1, le=168)):
     return analytics.seals(BUOYS, distance_km, hours)
