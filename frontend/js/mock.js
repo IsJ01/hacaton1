@@ -6,11 +6,11 @@
 
   // ---------- Buoy ----------
   const BUOYS = [
-    { buoy_id: 'b-001', name: 'Буй №1', geo: { lat: 44.45, lon: 47.2 } },
-    { buoy_id: 'b-002', name: 'Буй №2', geo: { lat: 44.1, lon: 47.35 } },
-    { buoy_id: 'b-003', name: 'Буй №3', geo: { lat: 43.75, lon: 47.5 } },
-    { buoy_id: 'b-004', name: 'Буй №4', geo: { lat: 43.35, lon: 47.6 } },
-    { buoy_id: 'b-005', name: 'Буй №5', geo: { lat: 43.0, lon: 47.65 } },
+    { buoy_id: 'b-001', name: 'Буй №1', geo: { lat: 43.05, lon: 47.65 } },
+    { buoy_id: 'b-002', name: 'Буй №2', geo: { lat: 43.38, lon: 47.74 } },
+    { buoy_id: 'b-003', name: 'Буй №3', geo: { lat: 43.73, lon: 47.84 } },
+    { buoy_id: 'b-004', name: 'Буй №4', geo: { lat: 44.03, lon: 47.92 } },
+    { buoy_id: 'b-005', name: 'Буй №5', geo: { lat: 44.43, lon: 47.65 } },
   ];
 
   // ---------- SoundEvent ----------
@@ -61,7 +61,7 @@
     {
       event_id: 'wtr-0001',
       type: 'illegal_discharge',
-      geo: { lat: 43.75, lon: 47.5 },
+      geo: { lat: 43.73, lon: 47.84 },
       timestamp: ago(25),
       details: { salinity: 9.9, salinity_delta: -2.6, level_delta_m: null, confidence: null },
       source: { buoy_id: 'b-003', image_id: null },
@@ -69,7 +69,7 @@
     {
       event_id: 'wtr-0002',
       type: 'illegal_discharge',
-      geo: { lat: 43.2, lon: 47.75 },
+      geo: { lat: 43.7, lon: 47.95 },
       timestamp: ago(190),
       details: { salinity: null, salinity_delta: null, level_delta_m: null, confidence: 0.91 },
       source: { buoy_id: null, image_id: 'img-0001' },
@@ -77,7 +77,7 @@
     {
       event_id: 'wtr-0003',
       type: 'level_anomaly',
-      geo: { lat: 44.3, lon: 47.45 },
+      geo: { lat: 44.35, lon: 47.7 },
       timestamp: ago(520),
       details: { salinity: null, salinity_delta: null, level_delta_m: 0.4, confidence: 0.84 },
       source: { buoy_id: null, image_id: 'img-0002' },
@@ -167,6 +167,38 @@
         };
       });
       return ok({ generated_at: ago(0), weather_source: 'climatology', training_data: 'synthetic', forecasts });
+    },
+    // Аналитика считается на бэкенде; здесь — упрощённые ответы, чтобы фронт открывался без него
+    getBuoyStatus: () => ok({ buoys: BUOYS.map((b, i) => {
+      const own = SOUND_EVENTS.filter((e) => e.buoy_id === b.buoy_id).map((e) => e.classification.label);
+      const crit = own.some((l) => l === 'boat' || l === 'gunshot') || WATER_EVENTS.some((w) => w.source.buoy_id === b.buoy_id);
+      const status = crit ? 'critical' : own.includes('anomaly') ? 'anomaly' : 'normal';
+      return { buoy_id: b.buoy_id, name: b.name, geo: b.geo, listen_radius_km: 25, status, online: true,
+        reason: status === 'normal' ? 'за сутки без происшествий' : 'заглушка', last_signal: ago(3), last_label: own[0] || null,
+        salinity: 12.5, water_temp_c: 11.2 - 0.25 * i, level_m: -28.9, telemetry_at: ago(3) };
+    }) }),
+    getNeighbors: (kind, id) => ok({ event_id: id, verdict: 'isolated', message: 'В режиме заглушек соседи не считаются', neighbors: [] }),
+    getSeals: () => ok({ generated_at: ago(0), window_h: 24, total_detections: 3, estimate_min: 1, method: 'заглушка',
+      buoys: [{ buoy_id: 'b-002', detections: 2, last_seen: ago(42) }, { buoy_id: 'b-004', detections: 1, last_seen: ago(130) }], groups: [] }),
+    getModelInfo: () => ok({
+      sound: { accuracy: 0.974, precision_macro: 0.978, recall_macro: 0.975, f1_macro: 0.975, n_samples: 38,
+               cv_f1_mean: 0.958, cv_f1_std: 0.042, anomaly_threshold: 0.6, n_classes: 5 },
+      forecast: { data: 'synthetic', samples: 30000, roc_auc: 0.749, brier: 0.157, accuracy: 0.774 },
+      library_size: 150,
+    }),
+    // Сценарий в заглушках: те же шаги, что в backend/demo.py
+    runScenario: () => {
+      const steps = [[0, 'b-001', 'boat', 0.86], [6, 'b-002', 'boat', 0.81], [12, 'b-002', 'gunshot', 0.93], [17, 'b-003', 'gunshot', 0.88]];
+      steps.forEach(([sec, buoy_id, label, conf]) => setTimeout(() => {
+        const id = 'evt-demo-' + ++userSeq;
+        SOUND_EVENTS.unshift(snd(id, buoy_id, 0, label, conf, 'anomaly'));
+      }, sec * 1000));
+      setTimeout(() => WATER_EVENTS.unshift({
+        event_id: 'wtr-demo-' + ++userSeq, type: 'illegal_discharge', geo: { lat: 43.73, lon: 47.84 }, timestamp: ago(0),
+        details: { salinity: 9.6, salinity_delta: -2.9, level_delta_m: null, confidence: 0.99 },
+        source: { buoy_id: 'b-003', image_id: null },
+      }), 23000);
+      return ok({ started: true, duration_sec: 23, message: 'Сценарий запущен' });
     },
     audioUrl: () => beep(),
     imageUrl: (imageId) => picture(imageId),

@@ -4,32 +4,43 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Эко-Щит Каспия — дашборд инспектора</title>
+  <link rel="icon" type="image/png" href="img/favicon.png">
   <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
   <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
   <header class="top">
+    <img class="forum-logo" src="img/forum-logo.jpg" alt="IV Каспийский цифровой форум 2026">
     <h1>Эко-Щит Каспия</h1>
-    <span id="status" class="status">подключение…</span>
+    <div class="kpis" id="kpis"></div>
+    <div class="top-right">
+      <button class="demo-run" id="demo-run" hidden>▶ Сценарий «браконьер»</button>
+      <label class="demo-toggle"><input type="checkbox" id="demo-mode"> Режим демо</label>
+      <span id="status" class="status"><i class="dot"></i><span>подключение…</span></span>
+    </div>
   </header>
 
   <div class="layout">
     <main class="main">
       <nav class="tabs" role="tablist">
         <button class="tab active" data-tab="map" role="tab">Карта</button>
-        <button class="tab" data-tab="all" role="tab">События</button>
-        <button class="tab" data-tab="crit" role="tab">Критические</button>
+        <button class="tab" data-tab="crit" role="tab">Инциденты <span class="count" id="crit-count" hidden></span></button>
+        <button class="tab" data-tab="all" role="tab">Все события</button>
         <button class="tab" data-tab="forecast" role="tab">Прогноз</button>
+        <button class="tab" data-tab="about" role="tab">О системе</button>
       </nav>
       <section class="panel" id="panel-map"><div id="map"></div></section>
+      <section class="panel" id="panel-crit" hidden>
+        <div class="list" id="list-crit" data-empty="Инцидентов нет"></div>
+      </section>
       <section class="panel" id="panel-all" hidden>
         <div class="list" id="list-all" data-empty="Событий пока нет"></div>
       </section>
-      <section class="panel" id="panel-crit" hidden>
-        <div class="list" id="list-crit" data-empty="Критических событий нет"></div>
-      </section>
       <section class="panel" id="panel-forecast" hidden>
         <div class="forecast" id="forecast"></div>
+      </section>
+      <section class="panel" id="panel-about" hidden>
+        <div class="about" id="about"></div>
       </section>
     </main>
 
@@ -39,10 +50,19 @@
     </aside>
   </div>
 
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+  <div class="modal" id="modal" hidden>
+    <div class="modal-box" role="dialog" aria-modal="true">
+      <button class="modal-close" id="modal-close" aria-label="Закрыть">×</button>
+      <div id="modal-body"></div>
+    </div>
+  </div>
+
   <script src="vendor/leaflet/leaflet.js"></script>
   <script src="js/config.js"></script>
   <script src="js/mock.js"></script>
   <script src="js/api.js"></script>
+  <script src="js/spectrogram.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>

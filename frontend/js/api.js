@@ -32,6 +32,16 @@
     getWaterEvents: (params) => request('/api/v1/water-events' + query(params)),
     // GET /api/v1/forecast → { generated_at, weather_source, training_data, forecasts: [BuoyForecast] }; query: buoy_id, days
     getForecast: (params) => request('/api/v1/forecast' + query(params)),
+    // GET /api/v1/buoy-status → { buoys: [{ status, reason, listen_radius_km, salinity, water_temp_c, level_m, online, … }] }
+    getBuoyStatus: () => request('/api/v1/buoy-status'),
+    // GET /api/v1/events/{id}/neighbors или /api/v1/water-events/{id}/neighbors → { verdict, message, neighbors }
+    getNeighbors: (kind, id) => request((kind === 'water' ? '/api/v1/water-events/' : '/api/v1/events/') + encodeURIComponent(id) + '/neighbors'),
+    // GET /api/v1/seals → { total_detections, estimate_min, buoys, groups: [{ center, drift, track, … }] }
+    getSeals: (params) => request('/api/v1/seals' + query(params)),
+    // GET /api/v1/model-info → { sound, forecast, library_size } (сверх контракта)
+    getModelInfo: () => request('/api/v1/model-info'),
+    // POST /api/v1/demo/scenario → { started, duration_sec, message } (сверх контракта)
+    runScenario: () => request('/api/v1/demo/scenario', { method: 'POST' }),
     // POST /api/v1/classify/upload — multipart: file, buoy_id?
     classifyUpload: (file, buoyId) => {
       const form = new FormData();

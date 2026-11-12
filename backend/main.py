@@ -6,6 +6,9 @@
   солёность → сравнение с нормой                         → WaterEvent (illegal_discharge)
   снимок    → поиск шлейфа на воде (satellite.py)        → WaterEvent (illegal_discharge)
   прогноз   → модель присутствия тюленя (forecast.py)    → GET /api/v1/forecast
+  телеметрия → температура воды и уровень; скачок уровня → WaterEvent (level_anomaly)
+  аналитика → статус буя за сутки, соседи события, тюлени (analytics.py)
+  демо      → история за сутки и сценарий «браконьер» (demo.py)
 
 Хранилище — SQLite (storage.py), настройки — config.py, буи — buoys.json.
 """
@@ -28,12 +31,14 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+import analytics
+import demo
 import forecast
 import satellite
 import sound
 import storage
-from config import (BUOYS_FILE, DATA_DIR, LIBRARY_DIR, NEAREST_BUOY_KM, SALINITY_NORM, SALINITY_THRESHOLD,
-                    WATER_COOLDOWN_MIN)
+from config import (BUOYS_FILE, DATA_DIR, DEMO_SEED, FORECAST_MODEL_PATH, LEVEL_NORM_M, LEVEL_THRESHOLD_M, LIBRARY_DIR,
+                    MODEL_PATH, NEAREST_BUOY_KM, SALINITY_NORM, SALINITY_THRESHOLD, SEAL_WINDOW_H, WATER_COOLDOWN_MIN)
 
 AUDIO_DIR = DATA_DIR / "audio"
 IMAGES_DIR = DATA_DIR / "images"
@@ -293,6 +298,10 @@ async def lifespan(_: FastAPI):
     BUOYS.update({b["buoy_id"]: b for b in json.loads(BUOYS_FILE.read_text(encoding="utf-8"))})
     sound.load_model()
     forecast.load_model()
+    if DEMO_SEED:
+        n = demo.seed_if_empty(BUOYS, library_file, process_sound, SALINITY_NORM, LEVEL_NORM_M)
+        if n:
+            print(f"Демо-история: {n} звуковых событий за сутки")
     print(f"Бэкенд готов: буёв {len(BUOYS)}, звуков в библиотеке {len(library_files())}, данные в {DATA_DIR}")
     yield
 
@@ -503,6 +512,101 @@ def get_forecast(buoy_id: Optional[str] = None, days: int = Query(7, ge=1, le=7)
     buoys = [BUOYS[buoy_id]] if buoy_id else list(BUOYS.values())
     week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
     return forecast.build(buoys, storage.count_sound_labels_since(week_ago), days)
+
+
+# ---------- Телеметрия буя (сверх контракта v2) ----------
+class TelemetryIn(BaseModel):
+    buoy_id: str = Field(examples=["b-003"])
+    water_temp_c: Optional[float] = Field(None, ge=-5, le=40, examples=[11.4])
+    level_m: Optional[float] = Field(None, ge=-40, le=0, examples=[-28.9], description="уровень, м (Балтийская система)")
+    timestamp: Optional[str] = Field(None, examples=["2026-11-12T12:00:00Z"])
+
+
+@app.post("/api/v1/telemetry", status_code=201, responses=NOT_FOUND, tags=["telemetry"],
+          summary="Температура воды и уровень от буя → детект аномалии уровня")
+def post_telemetry(body: TelemetryIn):
+    require_buoy(body.buoy_id)
+    ts = norm_ts(body.timestamp, "timestamp") or now_iso()
+    record = storage.add_telemetry(new_id("tel"), body.buoy_id, ts, body.water_temp_c, body.level_m)
+    event = None
+    if body.level_m is not None and abs(body.level_m - LEVEL_NORM_M) >= LEVEL_THRESHOLD_M:
+        delta = round(body.level_m - LEVEL_NORM_M, 2)
+        confidence = round(min(0.99, 0.55 + 0.15 * abs(delta) / LEVEL_THRESHOLD_M), 2)
+        event = storage.add_water_event(new_id("wtr"), "level_anomaly", BUOYS[body.buoy_id]["geo"], ts,
+                                        {"level_delta_m": delta, "confidence": confidence}, buoy_id=body.buoy_id)
+    return {**record, "anomaly_detected": event is not None, "event": event}
+
+
+@app.get("/api/v1/telemetry", responses=NOT_FOUND, tags=["telemetry"], summary="История телеметрии буя")
+def list_telemetry(buoy_id: Optional[str] = None,
+                   from_: Optional[str] = Query(None, alias="from", description="ISO-8601"),
+                   limit: int = Query(100, ge=1, le=5000)):
+    require_buoy(buoy_id)
+    return {"telemetry": storage.list_telemetry(buoy_id, norm_ts(from_, "from"), limit)}
+
+
+# ---------- Аналитика (сверх контракта v2) ----------
+@app.get("/api/v1/buoy-status", tags=["analytics"],
+         summary="Статус буёв за сутки (critical / anomaly / normal), радиус, солёность, температура, уровень")
+def get_buoy_status():
+    return {"buoys": analytics.buoy_status(BUOYS, distance_km)}
+
+
+@app.get("/api/v1/events/{event_id}/neighbors", responses=NOT_FOUND, tags=["analytics"],
+         summary="Какие соседние буи слышали то же самое (проверка ложных срабатываний)")
+def get_event_neighbors(event_id: str):
+    ev = storage.get_sound_event(event_id)
+    if not ev:
+        raise ApiError(404, "not_found", "Event not found")
+    return analytics.sound_neighbors(ev, BUOYS, distance_km)
+
+
+@app.get("/api/v1/water-events/{event_id}/neighbors", responses=NOT_FOUND, tags=["analytics"],
+         summary="У каких соседних буёв тоже отклонилась солёность")
+def get_water_event_neighbors(event_id: str):
+    ev = storage.get_water_event(event_id)
+    if not ev:
+        raise ApiError(404, "not_found", "Water event not found")
+    return analytics.water_neighbors(ev, BUOYS, distance_km)
+
+
+@app.get("/api/v1/seals", tags=["analytics"], summary="Тюлени: где слышны, оценка численности, куда дрейфуют")
+def get_seals(hours: float = Query(SEAL_WINDOW_H, ge=1, le=168)):
+    return analytics.seals(BUOYS, distance_km, hours)
+
+
+# ---------- Демо и описание моделей (сверх контракта v2) ----------
+class ScenarioOut(BaseModel):
+    started: bool
+    duration_sec: int
+    message: str
+
+
+@app.post("/api/v1/demo/scenario", response_model=ScenarioOut, tags=["demo"],
+          summary="Сценарий «браконьер»: лодка → второй буй → выстрел → сброс")
+def demo_scenario():
+    started = demo.run_scenario(
+        BUOYS, library_file, process_sound,
+        lambda buoy_id, value: post_salinity(SalinityIn(buoy_id=buoy_id, salinity=value)),
+        new_id, now_iso)
+    return {"started": started, "duration_sec": demo.duration_sec(),
+            "message": "Сценарий запущен" if started else "Сценарий уже идёт"}
+
+
+def _read_json(path: Path) -> Optional[dict]:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+@app.get("/api/v1/model-info", tags=["demo"], summary="Метрики моделей для страницы «О модели»")
+def model_info():
+    return {
+        "sound": _read_json(MODEL_PATH.parent / "metrics.json"),
+        "forecast": _read_json(FORECAST_MODEL_PATH.parent / "seal_forecast_metrics.json"),
+        "library_size": len(library_files()),
+    }
 
 
 # ---------- Статика ----------

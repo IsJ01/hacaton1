@@ -25,7 +25,11 @@ CREATE TABLE IF NOT EXISTS water_events (
     salinity REAL, salinity_delta REAL, level_delta_m REAL, confidence REAL,
     buoy_id TEXT, image_id TEXT
 );
+CREATE TABLE IF NOT EXISTS telemetry (
+    telemetry_id TEXT PRIMARY KEY, buoy_id TEXT, timestamp TEXT, water_temp_c REAL, level_m REAL
+);
 CREATE INDEX IF NOT EXISTS idx_sound_ts ON sound_events (timestamp);
+CREATE INDEX IF NOT EXISTS idx_tel_buoy_ts ON telemetry (buoy_id, timestamp);
 CREATE INDEX IF NOT EXISTS idx_meas_buoy_ts ON measurements (buoy_id, timestamp);
 CREATE INDEX IF NOT EXISTS idx_water_ts ON water_events (timestamp);
 """
@@ -130,6 +134,29 @@ def nearest_salinity(buoy_id: str, timestamp: str) -> Optional[float]:
         (buoy_id, timestamp),
     )
     return rows[0]["salinity"] if rows else None
+
+
+# ---------- телеметрия буя (температура воды, уровень) ----------
+def add_telemetry(telemetry_id: str, buoy_id: str, timestamp: str,
+                  water_temp_c: Optional[float], level_m: Optional[float]) -> dict:
+    _execute("INSERT INTO telemetry VALUES (?, ?, ?, ?, ?)", (telemetry_id, buoy_id, timestamp, water_temp_c, level_m))
+    return {"telemetry_id": telemetry_id, "buoy_id": buoy_id, "timestamp": timestamp,
+            "water_temp_c": water_temp_c, "level_m": level_m}
+
+
+def list_telemetry(buoy_id, ts_from, limit: int) -> list[dict]:
+    """Последние limit записей, по возрастанию времени."""
+    where, args = _where([("buoy_id = ?", buoy_id), ("timestamp >= ?", ts_from)])
+    rows = _query("SELECT * FROM telemetry" + where + " ORDER BY timestamp DESC, rowid DESC LIMIT ?", args + [limit])
+    return [dict(r) for r in reversed(rows)]
+
+
+def last_value(buoy_id: str, column: str) -> Optional[dict]:
+    """Последнее непустое значение телеметрии: {'value', 'timestamp'}. column — water_temp_c | level_m."""
+    assert column in ("water_temp_c", "level_m")
+    rows = _query(f"SELECT {column} AS value, timestamp FROM telemetry WHERE buoy_id = ? AND {column} IS NOT NULL "
+                  "ORDER BY timestamp DESC, rowid DESC LIMIT 1", (buoy_id,))
+    return dict(rows[0]) if rows else None
 
 
 # ---------- снимки ----------

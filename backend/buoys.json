@@ -1,7 +1,7 @@
 [
-  { "buoy_id": "b-001", "name": "Буй №1", "geo": { "lat": 43.0100, "lon": 47.5500 } },
-  { "buoy_id": "b-002", "name": "Буй №2", "geo": { "lat": 43.3200, "lon": 47.6200 } },
-  { "buoy_id": "b-003", "name": "Буй №3", "geo": { "lat": 43.6500, "lon": 47.5800 } },
-  { "buoy_id": "b-004", "name": "Буй №4", "geo": { "lat": 44.0500, "lon": 47.6500 } },
-  { "buoy_id": "b-005", "name": "Буй №5", "geo": { "lat": 44.4500, "lon": 47.2000 } }
+  { "buoy_id": "b-001", "name": "Буй №1", "geo": { "lat": 43.0500, "lon": 47.6500 }, "listen_radius_km": 25 },
+  { "buoy_id": "b-002", "name": "Буй №2", "geo": { "lat": 43.3800, "lon": 47.7400 }, "listen_radius_km": 25 },
+  { "buoy_id": "b-003", "name": "Буй №3", "geo": { "lat": 43.7300, "lon": 47.8400 }, "listen_radius_km": 25 },
+  { "buoy_id": "b-004", "name": "Буй №4", "geo": { "lat": 44.0300, "lon": 47.9200 }, "listen_radius_km": 25 },
+  { "buoy_id": "b-005", "name": "Буй №5", "geo": { "lat": 44.4300, "lon": 47.6500 }, "listen_radius_km": 25 }
 ]
