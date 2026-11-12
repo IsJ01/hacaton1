@@ -44,7 +44,9 @@ def load_dataset(data_dir=None):
         data_dir = Path(__file__).parent / "data"
 
     X, y = [], []
-    for folder_name, label in [("boat", 0), ("gunshot", 1), ("seal", 2), ("anomaly", 3), ("background", 4)]:
+    # Anomaly исключён из датасета: он определяется через fallback-логику
+    # (confidence < 0.6 → anomaly), а не как отдельный класс.
+    for folder_name, label in [("boat", 0), ("gunshot", 1), ("seal", 2), ("background", 3)]:
         folder_path = Path(data_dir) / folder_name
         if not folder_path.exists():
             print(f"Папка не найдена: {folder_path}")
@@ -64,7 +66,7 @@ if __name__ == "__main__":
     X, y = load_dataset()
     print(f"Датасет: {X.shape[0]} образцов, {X.shape[1]} признаков")
     from collections import Counter
-    labels = ["boat", "gunshot", "seal", "anomaly", "background"]
+    labels = ["boat", "gunshot", "seal", "background"]
     counts = Counter(y)
-    print("Распределение:", {labels[k]: counts.get(k, 0) for k in range(5)})
+    print("Распределение:", {labels[k]: counts.get(k, 0) for k in range(4)})
     print(f"Пример признаков: {X[0][:5]}")

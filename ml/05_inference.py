@@ -1,9 +1,10 @@
-"""Инференс: multiclass классификация (boat, gunshot, seal, anomaly, background).
+"""Инференс: 4-классовая классификация (boat, gunshot, seal, background) + anomaly fallback.
 
 Логика anomaly:
-- Модель предсказывает 5 классов.
+- Модель предсказывает 4 класса: boat, gunshot, seal, background.
 - Если top-1 confidence < ANOMALY_THRESHOLD → "anomaly".
 - Иначе — top-1 класс.
+- В ответе candidates включаем anomaly с вероятностью background (как в контракте).
 
 Возвращает ClassificationResult в формате API-контракта.
 """
@@ -22,7 +23,11 @@ N_MFCC = 13
 # Порог: ниже этого confidence → аномалия
 ANOMALY_THRESHOLD = 0.6
 
-LABELS = ["boat", "gunshot", "seal", "anomaly", "background"]
+# 4 класса модели (в порядке обучения)
+MODEL_LABELS = ["boat", "gunshot", "seal", "background"]
+
+# 4 метки контракта (anomaly вместо background)
+CONTRACT_LABELS = ["seal", "boat", "gunshot", "anomaly"]
 
 model = joblib.load(str(MODEL_PATH))
 
@@ -47,7 +52,7 @@ def _predict(features):
     proba = model.predict_proba(features)[0]
     top_idx = int(np.argmax(proba))
     top_conf = float(proba[top_idx])
-    top_label = LABELS[top_idx]
+    top_label = MODEL_LABELS[top_idx]
 
     # Anomaly fallback: если модель не уверена — это аномалия
     if top_conf < ANOMALY_THRESHOLD:
@@ -56,18 +61,39 @@ def _predict(features):
     return top_label, top_conf, proba
 
 
+def _build_candidates(proba, final_label):
+    """Строит candidates для контракта: seal, boat, gunshot, anomaly.
+    anomaly = background + (anomaly fallback weight)"""
+    # Матрица пробабилити модели: [boat, gunshot, seal, background]
+    # Контракт: seal, boat, gunshot, anomaly
+    # anomaly = background (всегда) + поправка если final_label == anomaly
+    candidates = []
+    for label in CONTRACT_LABELS:
+        if label == "seal":
+            conf = float(proba[2])  # seal
+        elif label == "boat":
+            conf = float(proba[0])  # boat
+        elif label == "gunshot":
+            conf = float(proba[1])  # gunshot
+        elif label == "anomaly":
+            conf = float(proba[3])  # background
+            if final_label == "anomaly":
+                conf = max(conf, 0.5)  # поднимаем anomaly confidence
+        candidates.append({"label": label, "confidence": round(conf, 2)})
+    return sorted(candidates, key=lambda c: -c["confidence"])
+
+
 def classify_audio(wav_path, return_candidates=True):
     """Классифицирует аудио-файл."""
     audio, orig_sr = sf.read(str(wav_path))
     features = _extract_features(audio, orig_sr)
     label, confidence, proba = _predict(features)
 
+    candidates = _build_candidates(proba, label)
+
     result = {"label": label, "confidence": confidence}
     if return_candidates:
-        result["candidates"] = [
-            {"label": LABELS[i], "confidence": float(proba[i])}
-            for i in range(len(LABELS))
-        ]
+        result["candidates"] = candidates
     return result
 
 
@@ -77,14 +103,9 @@ def classify_bytes(audio_bytes, sr=SR):
     features = _extract_features(audio, orig_sr)
     label, confidence, proba = _predict(features)
 
-    return {
-        "label": label,
-        "confidence": confidence,
-        "candidates": [
-            {"label": LABELS[i], "confidence": float(proba[i])}
-            for i in range(len(LABELS))
-        ]
-    }
+    candidates = _build_candidates(proba, label)
+
+    return {"label": label, "confidence": confidence, "candidates": candidates}
 
 
 if __name__ == "__main__":
