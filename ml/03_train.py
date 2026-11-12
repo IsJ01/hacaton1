@@ -7,6 +7,8 @@ import json
 from pathlib import Path
 import numpy as np
 import joblib
+from scipy.signal import butter, filtfilt
+from scipy.io import wavfile
 from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.model_selection import train_test_split, StratifiedKFold, cross_val_score
 from sklearn.tree import DecisionTreeClassifier
@@ -20,6 +22,55 @@ _spec = importlib.util.spec_from_file_location("preprocess", "02_preprocess.py")
 _preprocess = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_preprocess)
 load_dataset = _preprocess.load_dataset
+
+
+def augment_realistic(audio, sr=22050):
+    """Делает синтетику похожей на запись с микрофона.
+
+    Добавляет артефакты реальной записи: гул сети 50 Гц, случайный gain,
+    клиппинг, реверберацию, ветровой шум, квантование 16-bit.
+    Это сужает domain gap между синтетикой и реальными записями.
+    """
+    audio = audio.astype(np.float32).copy()
+
+    # 1. Гул сети 50/60 Гц (всегда есть при записи)
+    t = np.arange(len(audio)) / sr
+    audio += 0.008 * np.sin(2 * np.pi * 50 * t)
+
+    # 2. Случайный gain (имитация разного расстояния до источника)
+    audio *= np.random.uniform(0.15, 1.3)
+
+    # 3. Клиппинг (перегруз микрофона)
+    audio = np.clip(audio, -0.9, 0.9)
+
+    # 4. Реверберация (затухающие копии сигнала)
+    for delay_ms in [15, 35, 70]:
+        delay = int(sr * delay_ms / 1000)
+        if delay < len(audio):
+            audio[delay:] += np.random.uniform(0.08, 0.2) * audio[:-delay]
+
+    # 5. Ветровой шум (низкочастотный)
+    wind = np.random.randn(len(audio))
+    b, a = butter(2, 150, btype='low', fs=sr)
+    wind = filtfilt(b, a, wind)
+    audio += 0.03 * wind
+
+    # 6. Квантование 16-bit (имитация ADC)
+    audio = np.round(audio * 32767) / 32767
+
+    # Нормализация
+    audio = audio / (np.max(np.abs(audio)) + 1e-8) * 0.85
+    return audio.astype(np.float32)
+
+
+# --- Аугментация синтетики под реализм ---
+DATA_DIR = Path(__file__).parent / "data"
+for cls in ["boat", "gunshot", "seal", "background"]:
+    for wav in (DATA_DIR / cls).glob("*.wav"):
+        sr, audio = wavfile.read(str(wav))
+        audio = audio.astype(np.float32) / 32768.0
+        audio = augment_realistic(audio, sr)
+        wavfile.write(str(wav), sr, (audio * 32767).astype(np.int16))
 
 # --- Загрузка ---
 X, y = load_dataset()

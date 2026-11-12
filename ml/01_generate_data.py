@@ -25,6 +25,38 @@ def pink_noise(n):
     from scipy.signal import lfilter
     return lfilter(b, a, white)
 
+def augment_realistic(audio, sr=22050):
+    """Делает синтетику похожей на запись с микрофона."""
+    import numpy as np
+    from scipy.signal import butter, filtfilt
+
+    # 1. Гул сети 50 Гц (всегда есть при записи)
+    t = np.arange(len(audio)) / sr
+    audio += 0.008 * np.sin(2 * np.pi * 50 * t)
+
+    # 2. Случайный gain (0.1–1.5) — имитация разного расстояния
+    audio *= np.random.uniform(0.15, 1.3)
+
+    # 3. Клиппинг (перегруз микрофона)
+    audio = np.clip(audio, -0.9, 0.9)
+
+    # 4. Реверберация (затухающие копии)
+    for delay_ms in [15, 35, 70]:
+        delay = int(sr * delay_ms / 1000)
+        audio[delay:] += np.random.uniform(0.08, 0.2) * audio[:-delay]
+
+    # 5. Ветровой шум (низкочастотный)
+    wind = np.random.randn(len(audio))
+    b, a = butter(2, 150, btype='low', fs=sr)
+    wind = filtfilt(b, a, wind)
+    audio += 0.03 * wind
+
+    # 6. Квантование 16-bit (имитация ADC)
+    audio = np.round(audio * 32767) / 32767
+
+    # Нормализация
+    audio = audio / (np.max(np.abs(audio)) + 1e-8) * 0.85
+    return audio.astype(np.float32)
 
 def generate_boat_motor(duration=DURATION, sr=SR):
     """Звук подвесного мотора: тон + гармоники винта + шум."""

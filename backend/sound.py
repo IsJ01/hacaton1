@@ -18,10 +18,9 @@ SR = 22050
 N_MFCC = 13
 MIN_SAMPLES = 2048  # короче одного окна MFCC — дополняем тишиной
 
-# Порядок классов модели (как в ml/02_preprocess.py: boat=0 … background=4)
-MODEL_LABELS = ["boat", "gunshot", "seal", "anomaly", "background"]
-# В контракте только 4 метки. Класса background в контракте нет,
-# поэтому его вероятность прибавляем к anomaly («нераспознанный звук»).
+# Порядок классов модели (как в ml/02_preprocess.py: boat=0, gunshot=1, seal=2, background=3)
+MODEL_LABELS = ["boat", "gunshot", "seal", "background"]
+# В контракте 4 метки: seal, boat, gunshot, anomaly
 CONTRACT_LABELS = ["seal", "boat", "gunshot", "anomaly"]
 
 _model = None
@@ -36,7 +35,9 @@ def load_model() -> None:
     if not MODEL_PATH.is_file():
         raise RuntimeError(f"Не найдена модель: {MODEL_PATH} (задай MODEL_PATH)")
     _model = joblib.load(str(MODEL_PATH))
-    classify(np.zeros(SR, dtype=np.float32), SR)  # прогрев: первый вызов librosa медленный
+    # Прогрев: тихий шум вместо нулей, чтобы librosa не выдал предупреждения
+    warm = np.random.randn(SR).astype(np.float32) * 0.001
+    classify(warm, SR)
 
 
 def decode(raw: bytes) -> tuple[np.ndarray, int]:
@@ -71,14 +72,41 @@ def _features(audio: np.ndarray, sr: int) -> np.ndarray:
 def classify(audio: np.ndarray, sr: int) -> dict:
     """Возвращает ClassificationResult из контракта: { label, confidence, candidates }."""
     proba = dict(zip(MODEL_LABELS, _model.predict_proba(_features(audio, sr))[0]))
-    proba["anomaly"] += proba.pop("background")
 
-    candidates = sorted(
-        ({"label": label, "confidence": round(float(proba[label]), 2)} for label in CONTRACT_LABELS),
-        key=lambda c: -c["confidence"],
-    )
+    # Anomaly fallback: если модель не уверена → anomaly
+    top_idx = int(np.argmax(list(proba.values())))
+    top_conf = list(proba.values())[top_idx]
+    top_label = MODEL_LABELS[top_idx]
+
+    # Правило:
+    # 1) Если top_conf < threshold → anomaly (модель не уверена)
+    # 2) Если top_label == "background" → anomaly (background в контракте = anomaly)
+    # 3) Иначе → top_label
+    if top_conf < ANOMALY_THRESHOLD or top_label == "background":
+        final_label = "anomaly"
+        anomaly_conf = proba["background"] + (1 - top_conf) * 0.5
+    else:
+        final_label = top_label
+        anomaly_conf = proba["background"]
+
+    # Строим candidates в порядке контракта: seal, boat, gunshot, anomaly
+    candidates = []
+    for label in CONTRACT_LABELS:
+        if label == "seal":
+            conf = proba["seal"]
+        elif label == "boat":
+            conf = proba["boat"]
+        elif label == "gunshot":
+            conf = proba["gunshot"]
+        elif label == "anomaly":
+            conf = anomaly_conf
+        candidates.append({"label": label, "confidence": round(float(conf), 2)})
+
+    # Сортируем по убыванию confidence
+    candidates.sort(key=lambda c: -c["confidence"])
+
     top = candidates[0]
-    candidates = [c for c in candidates if c is top or c["confidence"] > 0]  # нулевые варианты не показываем
-    # правило ML-команды (ml/05_inference.py): модель не уверена → anomaly
-    label = top["label"] if top["confidence"] >= ANOMALY_THRESHOLD else "anomaly"
-    return {"label": label, "confidence": top["confidence"], "candidates": candidates}
+    # Убираем нулевые варианты
+    candidates = [c for c in candidates if c is top or c["confidence"] > 0]
+
+    return {"label": final_label, "confidence": top_conf, "candidates": candidates}
