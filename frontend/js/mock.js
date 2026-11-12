@@ -146,6 +146,28 @@
       SOUND_EVENTS.unshift({ ...res, source: 'user', timestamp: ago(0) });
       return ok(res);
     },
+    getForecast: (p = {}) => {
+      const days = +p.days || 7;
+      const level = (s) => (s >= 0.5 ? 'high' : s >= 0.25 ? 'medium' : 'low');
+      const forecasts = BUOYS.filter((b) => !p.buoy_id || b.buoy_id === p.buoy_id).map((b, bi) => {
+        const threats = [0, 4, 1, 0, 3][bi % 5];
+        return {
+          buoy_id: b.buoy_id,
+          seal_events_7d: [0, 2, 1, 0, 3][bi % 5],
+          threat_events_7d: threats,
+          days: Array.from({ length: days }, (_, i) => {
+            const prob = +(0.35 + 0.08 * bi + 0.05 * Math.sin(i + bi)).toFixed(2);
+            const score = +((prob * (1 + Math.min(threats, 5) / 5)) / 2).toFixed(2);
+            return {
+              date: new Date(Date.now() + i * 86400000).toISOString().slice(0, 10),
+              seal_probability: prob, risk_score: score, risk_level: level(score),
+              air_temp_c: 8 + i, wind_ms: 4 + (i % 3),
+            };
+          }),
+        };
+      });
+      return ok({ generated_at: ago(0), weather_source: 'climatology', training_data: 'synthetic', forecasts });
+    },
     audioUrl: () => beep(),
     imageUrl: (imageId) => picture(imageId),
   };

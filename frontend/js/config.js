@@ -14,6 +14,11 @@ window.CONFIG = {
   EVENTS_LIMIT: 50,       // limit для /events и /water-events
   SALINITY_LIMIT: 100,    // limit для /salinity
 
+  // ---------- ПРОГНОЗ ----------
+  FORECAST_DAYS: 7,              // на сколько дней вперёд (1–7)
+  FORECAST_REFRESH_MS: 60000,    // как часто обновлять открытую вкладку «Прогноз»
+  RISK_LEVELS: { low: 'низкий', medium: 'средний', high: 'высокий' },
+
   // ---------- КРИТИЧЕСКИЕ СОБЫТИЯ ----------
   // Что попадает во вкладку «Критические».
   CRITICAL_SOUND_LABELS: ['gunshot', 'boat'],

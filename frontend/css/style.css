@@ -82,3 +82,17 @@ button { font: inherit; cursor: pointer; }
   .side { border-left: 0; border-top: 1px solid var(--line); }
   .tab { flex: 1; padding: 11px 6px; }
 }
+
+/* --- прогноз --- */
+.forecast { padding: 16px; max-width: 980px; }
+.forecast h2 { font-size: 16px; margin: 0 0 12px; }
+.forecast .sub { color: var(--muted); font-size: 13px; margin: 10px 0 0; }
+.fc { border-collapse: separate; border-spacing: 4px; background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 8px; }
+.fc th { font-size: 12px; font-weight: 600; color: var(--muted); padding: 4px 8px; text-align: center; }
+.fc th.fc-buoy { text-align: left; color: var(--text); font-size: 14px; white-space: nowrap; }
+.fc td { text-align: center; padding: 9px 10px; border-radius: 4px; font-weight: 600; min-width: 58px; }
+.risk.low { background: #e3f1e4; color: #1e5b22; }
+.risk.medium { background: #fdeccb; color: #7a4a00; }
+.risk.high { background: #f8d3d3; color: #8e1b1b; }
+.risk-key { display: inline-block; padding: 1px 8px; border-radius: 4px; font-weight: 600; }
+@media (max-width: 800px) { #panel-forecast { overflow-x: auto; } }

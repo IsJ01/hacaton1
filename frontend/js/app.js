@@ -30,13 +30,14 @@
   let map;
   function showTab(name) {
     document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
-    ['map', 'all', 'crit'].forEach((n) => ($('#panel-' + n).hidden = n !== name));
+    ['map', 'all', 'crit', 'forecast'].forEach((n) => ($('#panel-' + n).hidden = n !== name));
     if (name === 'map') map.invalidateSize();
+    if (name === 'forecast') loadForecast();
   }
   document.querySelectorAll('.tab').forEach((t) => t.addEventListener('click', () => showTab(t.dataset.tab)));
 
   // ---------- карта ----------
-  map = L.map('map').setView(C.MAP_CENTER, C.MAP_ZOOM);
+  map = L.map('map', { attributionControl: false }).setView(C.MAP_CENTER, C.MAP_ZOOM);
   L.tileLayer(C.TILE_URL, { attribution: C.TILE_ATTRIBUTION, maxZoom: 18 }).addTo(map);
   const buoyLayer = L.layerGroup().addTo(map);
   const waterLayer = L.layerGroup().addTo(map);
@@ -283,6 +284,45 @@
       setResult(li, errHtml('Ошибка: ' + e.message));
     }
   }
+
+  // ---------- прогноз присутствия тюленя ----------
+  async function loadForecast() {
+    const box = $('#forecast');
+    if (!box.innerHTML) box.innerHTML = '<p class="sub">Загрузка прогноза…</p>';
+    try {
+      renderForecast(await Api.getForecast({ days: C.FORECAST_DAYS }));
+    } catch (e) {
+      box.innerHTML = '<p class="err-text">Прогноз недоступен: ' + esc(e.message) + '</p>';
+    }
+  }
+
+  function renderForecast(data) {
+    const list = data.forecasts || [];
+    if (!list.length) { $('#forecast').innerHTML = '<p class="sub">Нет данных прогноза</p>'; return; }
+    const day = (iso) => new Date(iso + 'T00:00:00').toLocaleDateString('ru-RU', { weekday: 'short', day: '2-digit', month: '2-digit' });
+    const head = list[0].days.map((d) => '<th>' + esc(day(d.date)) + '</th>').join('');
+    const rows = list.map((f) =>
+      '<tr><th class="fc-buoy">' + esc(buoyName(f.buoy_id)) + '</th>' +
+      f.days.map((d) =>
+        '<td class="risk ' + esc(d.risk_level) + '" title="Риск: ' + esc(C.RISK_LEVELS[d.risk_level] || d.risk_level) +
+        ' (' + pct(d.risk_score) + ') · воздух ' + esc(d.air_temp_c) + ' °C · ветер ' + esc(d.wind_ms) + ' м/с">' +
+        pct(d.seal_probability) + '</td>'
+      ).join('') +
+      '<td>' + esc(f.seal_events_7d) + '</td><td>' + esc(f.threat_events_7d) + '</td></tr>'
+    ).join('');
+    const weather = data.weather_source === 'open-meteo' ? 'прогноз Open-Meteo' : 'климатическая норма (нет связи с Open-Meteo)';
+    $('#forecast').innerHTML =
+      '<h2>Вероятность присутствия каспийского тюленя</h2>' +
+      '<table class="fc"><thead><tr><th></th>' + head + '<th>Тюлень<br>за 7 дн.</th><th>Лодки и выстрелы<br>за 7 дн.</th></tr></thead>' +
+      '<tbody>' + rows + '</tbody></table>' +
+      '<p class="sub">Цвет — приоритет патрулирования: ' +
+      ['low', 'medium', 'high'].map((l) => '<span class="risk-key risk ' + l + '">' + esc(C.RISK_LEVELS[l]) + '</span>').join(' ') +
+      '. Он растёт с вероятностью тюленя и с числом лодок и выстрелов у буя.</p>' +
+      '<p class="sub">Погода: ' + weather + '. ' +
+      (data.training_data === 'synthetic' ? 'Модель обучена на синтетических данных. ' : '') +
+      'Обновлено: ' + fmtTime(data.generated_at) + '</p>';
+  }
+  setInterval(() => { if (!$('#panel-forecast').hidden) loadForecast(); }, C.FORECAST_REFRESH_MS);
 
   // ---------- загрузка данных ----------
   function setStatus(ok) {

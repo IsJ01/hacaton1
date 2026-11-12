@@ -19,6 +19,7 @@
         <button class="tab active" data-tab="map" role="tab">Карта</button>
         <button class="tab" data-tab="all" role="tab">События</button>
         <button class="tab" data-tab="crit" role="tab">Критические</button>
+        <button class="tab" data-tab="forecast" role="tab">Прогноз</button>
       </nav>
       <section class="panel" id="panel-map"><div id="map"></div></section>
       <section class="panel" id="panel-all" hidden>
@@ -26,6 +27,9 @@
       </section>
       <section class="panel" id="panel-crit" hidden>
         <div class="list" id="list-crit" data-empty="Критических событий нет"></div>
+      </section>
+      <section class="panel" id="panel-forecast" hidden>
+        <div class="forecast" id="forecast"></div>
       </section>
     </main>
 

@@ -5,6 +5,7 @@
   звук      → обученная модель (sound.py)              → SoundEvent
   солёность → сравнение с нормой                         → WaterEvent (illegal_discharge)
   снимок    → поиск шлейфа на воде (satellite.py)        → WaterEvent (illegal_discharge)
+  прогноз   → модель присутствия тюленя (forecast.py)    → GET /api/v1/forecast
 
 Хранилище — SQLite (storage.py), настройки — config.py, буи — buoys.json.
 """
@@ -14,7 +15,7 @@ import json
 import random
 import secrets
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from math import asin, cos, radians, sin, sqrt
 from pathlib import Path
@@ -27,6 +28,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+import forecast
 import satellite
 import sound
 import storage
@@ -178,6 +180,35 @@ class SatelliteCreated(BaseModel):
     image_url: str
 
 
+class RiskLevel(str, Enum):
+    low = "low"
+    medium = "medium"
+    high = "high"
+
+
+class ForecastDay(BaseModel):
+    date: str = Field(description="YYYY-MM-DD")
+    seal_probability: float = Field(description="вероятность присутствия тюленя, 0..1")
+    risk_score: float = Field(description="приоритет патрулирования, 0..1")
+    risk_level: RiskLevel
+    air_temp_c: float
+    wind_ms: float
+
+
+class BuoyForecast(BaseModel):
+    buoy_id: str
+    seal_events_7d: int = Field(description="сколько раз буй слышал тюленя за 7 дней")
+    threat_events_7d: int = Field(description="лодки + выстрелы у буя за 7 дней")
+    days: list[ForecastDay]
+
+
+class ForecastOut(BaseModel):
+    generated_at: str
+    weather_source: str = Field(description="open-meteo | climatology")
+    training_data: str = Field(description="на чём обучена модель: synthetic | real")
+    forecasts: list[BuoyForecast]
+
+
 class ErrorOut(BaseModel):
     error: str
     message: str
@@ -261,6 +292,7 @@ async def lifespan(_: FastAPI):
     storage.init(DATA_DIR / "eco.db")
     BUOYS.update({b["buoy_id"]: b for b in json.loads(BUOYS_FILE.read_text(encoding="utf-8"))})
     sound.load_model()
+    forecast.load_model()
     print(f"Бэкенд готов: буёв {len(BUOYS)}, звуков в библиотеке {len(library_files())}, данные в {DATA_DIR}")
     yield
 
@@ -459,6 +491,18 @@ def get_water_event(event_id: str):
     if not ev:
         raise ApiError(404, "not_found", "Water event not found")
     return ev
+
+
+# ---------- Прогноз ----------
+@app.get("/api/v1/forecast", response_model=ForecastOut, responses={404: {"model": ErrorOut}, 503: {"model": ErrorOut}},
+         tags=["forecast"], summary="Прогноз присутствия тюленя по буям на ближайшие дни")
+def get_forecast(buoy_id: Optional[str] = None, days: int = Query(7, ge=1, le=7)):
+    require_buoy(buoy_id)
+    if not forecast.is_ready():
+        raise ApiError(503, "unavailable", "Forecast model is not loaded")
+    buoys = [BUOYS[buoy_id]] if buoy_id else list(BUOYS.values())
+    week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return forecast.build(buoys, storage.count_sound_labels_since(week_ago), days)
 
 
 # ---------- Статика ----------

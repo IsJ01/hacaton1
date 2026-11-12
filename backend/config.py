@@ -15,6 +15,7 @@ MODEL_PATH = _path("MODEL_PATH", ROOT / "ml" / "models" / "classifier.pkl")  # �
 LIBRARY_DIR = _path("LIBRARY_DIR", ROOT / "ml" / "data")  # библиотека звуков для /classify и /events без audio
 DATA_DIR = _path("DATA_DIR", BASE / "data")               # база SQLite, сохранённые звуки и снимки
 BUOYS_FILE = _path("BUOYS_FILE", BASE / "buoys.json")     # список буёв
+FORECAST_MODEL_PATH = _path("FORECAST_MODEL_PATH", ROOT / "ml" / "models" / "seal_forecast.pkl")  # модель прогноза
 
 # --- звук ---
 ANOMALY_THRESHOLD = float(os.getenv("ANOMALY_THRESHOLD", "0.6"))  # уверенность ниже порога → anomaly
@@ -27,3 +28,8 @@ WATER_COOLDOWN_MIN = float(os.getenv("WATER_COOLDOWN_MIN", "30"))   # не ду�
 # --- спутник ---
 PLUME_MIN_FRACTION = float(os.getenv("PLUME_MIN_FRACTION", "0.01"))  # доля снимка под шлейфом → сброс
 NEAREST_BUOY_KM = float(os.getenv("NEAREST_BUOY_KM", "25"))          # снимок привязываем к бую ближе этого
+
+# --- прогноз ---
+USE_WEATHER_API = os.getenv("USE_WEATHER_API", "1") == "1"  # 0 — не ходить в интернет, брать климатическую норму
+WEATHER_URL = os.getenv("WEATHER_URL", "https://api.open-meteo.com/v1/forecast")
+WEATHER_TIMEOUT_SEC = float(os.getenv("WEATHER_TIMEOUT_SEC", "4"))

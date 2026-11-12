@@ -1,0 +1,17 @@
+{
+  "data": "synthetic",
+  "samples": 30000,
+  "positive_share": 0.244,
+  "roc_auc": 0.749,
+  "brier": 0.157,
+  "accuracy": 0.774,
+  "feature_importance": {
+    "doy_sin": 0.176,
+    "doy_cos": 0.17,
+    "lat": 0.039,
+    "air_temp_c": 0.256,
+    "wind_ms": 0.036,
+    "seal_7d": 0.289,
+    "threat_7d": 0.034
+  }
+}

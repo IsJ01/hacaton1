@@ -30,6 +30,8 @@
     getSalinity: (params) => request('/api/v1/salinity' + query(params)),
     // GET /api/v1/water-events → { total, events: [WaterEvent] }; query: type, from, to, limit, offset
     getWaterEvents: (params) => request('/api/v1/water-events' + query(params)),
+    // GET /api/v1/forecast → { generated_at, weather_source, training_data, forecasts: [BuoyForecast] }; query: buoy_id, days
+    getForecast: (params) => request('/api/v1/forecast' + query(params)),
     // POST /api/v1/classify/upload — multipart: file, buoy_id?
     classifyUpload: (file, buoyId) => {
       const form = new FormData();
