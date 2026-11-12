@@ -42,6 +42,10 @@
     // GET …/{id}/context?minutes= → { total, counts, buoys, items: [{ kind, event_id, label, delta_sec, distance_km, … }] }
     getContext: (kind, id, minutes) =>
       request((kind === 'water' ? '/api/v1/water-events/' : '/api/v1/events/') + encodeURIComponent(id) + '/context' + query({ minutes })),
+    // Гибель тюленей: находки туш и расследование (сверх контракта)
+    getCarcasses: () => request('/api/v1/carcasses'),
+    postCarcass: (body) => request('/api/v1/carcasses', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
+    getInvestigation: (id) => request('/api/v1/carcasses/' + encodeURIComponent(id) + '/investigation'),
     // GET /api/v1/seals → { total_detections, estimate_min, buoys, groups: [{ center, drift, track, … }] }
     getSeals: (params) => request('/api/v1/seals' + query(params)),
     // GET /api/v1/model-info → { sound, forecast, library_size } (сверх контракта)

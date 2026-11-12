@@ -65,13 +65,14 @@ def buoy_status(buoys: dict, distance_km: Callable) -> list[dict]:
         sal_jumps = [m for m in sal if abs(m["salinity"] - SALINITY_NORM) >= ANOMALY_SALINITY_DELTA]
 
         critical = [LABEL_RU.get(l, l) + " ×" + str(n) for l, n in counts.items() if l in CRITICAL_LABELS]
-        critical += ["сброс" if w["type"] == "illegal_discharge" else "аномалия уровня" for w in own_water]
+        critical += [{"illegal_discharge": "сброс", "gas_seep": "выброс газа"}.get(w["type"], "аномалия уровня") for w in own_water]
         anomaly = (["аномальный звук ×" + str(counts["anomaly"])] if counts.get("anomaly") else [])
         anomaly += (["скачок солёности ×" + str(len(sal_jumps))] if sal_jumps else [])
         status = "critical" if critical else "anomaly" if anomaly else "normal"
         reason = ", ".join(dict.fromkeys(critical or anomaly)) or "за сутки без происшествий"
 
         temp, level = storage.last_value(bid, "water_temp_c"), storage.last_value(bid, "level_m")
+        methane = storage.last_value(bid, "methane_nmol")
         stamps = [own[0]["timestamp"]] if own else []
         stamps += [sal[-1]["timestamp"]] if sal else []
         stamps += [x["timestamp"] for x in (temp, level) if x]
@@ -92,6 +93,7 @@ def buoy_status(buoys: dict, distance_km: Callable) -> list[dict]:
             "salinity": sal[-1]["salinity"] if sal else storage.nearest_salinity(bid, _iso(now)),
             "water_temp_c": temp["value"] if temp else None,
             "level_m": level["value"] if level else None,
+            "methane_nmol": methane["value"] if methane else None,
             "telemetry_at": max((x["timestamp"] for x in (temp, level) if x), default=None),
         })
     return result

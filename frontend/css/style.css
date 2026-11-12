@@ -166,7 +166,7 @@ body.demo .buoy-actions { display: flex; }
 .lg.listen-key { background: rgba(26,115,232,.1); border: 1px solid rgba(26,115,232,.45); box-shadow: none; }
 .lg.water-key { border-radius: 2px; transform: rotate(45deg); background: var(--crit); width: 9px; height: 9px; }
 .lg.seal-key { background: #7c4dff; }
-.sensors { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin: 10px 0 0; }
+.sensors { display: grid; grid-template-columns: repeat(auto-fit, minmax(62px, 1fr)); gap: 6px; margin: 10px 0 0; }
 .sensors div { background: var(--soft); border-radius: var(--r-sm); padding: 6px 8px; }
 .sensors dt { font-size: 11px; color: var(--muted); }
 .sensors dd { margin: 0; font-weight: 500; }
@@ -349,3 +349,51 @@ code { font-family: "Roboto Mono", ui-monospace, monospace; font-size: .92em; ba
 .ctx-table tr.origin { background: #e8f0fe; cursor: default; }
 .link { border: 0; background: none; color: var(--link); font-size: 12px; padding: 0; margin-left: 8px; }
 .link:hover { text-decoration: underline; }
+
+/* --- гибель тюленей --- */
+.badge.gas_seep { background: #f3e8fd; color: #7c4dff; }
+.mk.gas_seep { background: #7c4dff; }
+.tl-dot.gas_seep { background: #7c4dff; }
+.mortality { padding: 28px 24px 40px; max-width: 1200px; }
+.mort-intro h2 { font-size: 32px; margin: 0 0 8px; }
+.mort-intro p { color: var(--muted); font-size: 15px; max-width: 820px; margin: 0 0 22px; }
+.mort-grid { display: grid; grid-template-columns: 320px 1fr; gap: 18px; align-items: start; }
+.mort-list { display: flex; flex-direction: column; gap: 8px; }
+.mort-head { display: flex; align-items: center; justify-content: space-between; }
+.btn.sm { flex: none; padding: 5px 12px; font-size: 12px; }
+.carc { text-align: left; border: 1px solid var(--line); border-radius: var(--r); background: var(--card); padding: 12px 14px; display: flex; flex-direction: column; gap: 2px; color: var(--text); }
+.carc:hover { box-shadow: var(--shadow); }
+.carc.on { border-color: var(--text); box-shadow: 0 0 0 1px var(--text); }
+.carc b { font-weight: 500; font-size: 15px; }
+.carc span { font-size: 12px; color: var(--muted); }
+.carc-form { background: var(--soft); border-radius: var(--r); padding: 12px; display: flex; flex-direction: column; gap: 8px; font-size: 12px; }
+.carc-form[hidden] { display: none; }
+.carc-form .row { display: flex; gap: 8px; }
+.carc-form label { display: flex; flex-direction: column; gap: 3px; flex: 1; color: var(--muted); }
+.carc-form input, .carc-form select { font: inherit; font-size: 13px; padding: 7px 10px; border: 1px solid var(--line); border-radius: var(--r-sm); background: #fff; color: var(--text); }
+.mort-report { background: var(--card); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 22px; min-height: 200px; }
+.mort-report h3 { font-size: 16px; margin: 20px 0 10px; }
+.verdict-card { background: #0b0c10; color: #fff; border-radius: var(--r); padding: 18px 20px; }
+.verdict-card .sub { color: rgba(255,255,255,.6); font-size: 12px; }
+.verdict-card h3 { margin: 4px 0 6px; font-size: 22px; font-weight: 450; }
+.verdict-card p { margin: 0 0 12px; color: rgba(255,255,255,.75); font-size: 13px; }
+.verdict-card .btn { background: #fff; color: var(--text); border: 0; }
+.hyp { padding: 10px 0; border-bottom: 1px solid var(--line); }
+.hyp-head { display: flex; justify-content: space-between; font-size: 14px; }
+.hyp-head b { font-weight: 500; }
+.hyp-bar { height: 8px; border-radius: 999px; background: var(--soft-2); margin: 6px 0; overflow: hidden; }
+.hyp-bar i { display: block; height: 100%; border-radius: 999px; }
+.hyp ul { margin: 4px 0 4px 18px; padding: 0; font-size: 13px; }
+.hyp .sub { color: var(--muted); font-size: 12px; }
+.ev-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.ev-chips .badge { border: 0; cursor: pointer; font: inherit; font-size: 12px; }
+.mort-note { margin-top: 18px; }
+.carc-mk { position: absolute; transform: translate(-50%, -50%); width: 30px; height: 30px; border-radius: 50%; background: #3c4043; color: #fff;
+  display: flex; align-items: center; justify-content: center; font-size: 12px; border: 2px solid #fff; box-shadow: 0 2px 8px rgba(18,19,23,.35); cursor: pointer; }
+.carc-mk.on { background: #d93025; }
+.carc-mk b { font-weight: 500; }
+.drift-line { stroke: #3c4043; stroke-width: 2; stroke-dasharray: 4 6; fill: none; }
+.drift-zone { fill: #d93025; fill-opacity: .05; stroke: #d93025; stroke-opacity: .25; stroke-width: 1; }
+.drift-label { position: absolute; transform: translate(-50%, -50%); background: #d93025; color: #fff; border-radius: 999px; padding: 3px 10px; font-size: 11px; white-space: nowrap; }
+.quake { fill: #ff6d00; fill-opacity: .35; stroke: #ff6d00; stroke-width: 1.5; }
+@media (max-width: 900px) { .mort-grid { grid-template-columns: 1fr; } }

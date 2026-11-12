@@ -8,6 +8,7 @@
   прогноз   → модель присутствия тюленя (forecast.py)    → GET /api/v1/forecast
   телеметрия → температура воды и уровень; скачок уровня → WaterEvent (level_anomaly)
   аналитика → статус буя за сутки, соседи события, тюлени (analytics.py)
+  находка туши тюленя → обратный дрейф + улики буёв + сейсмика → версии гибели (investigation.py)
   демо      → история за сутки при DEMO_SEED=1 (demo.py); обычно данные шлёт эмулятор буя
 
 Хранилище — SQLite (storage.py), настройки — config.py, буи — buoys.json.
@@ -34,10 +35,12 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 import analytics
 import demo
 import forecast
+import investigation
 import satellite
 import sound
 import storage
 from config import (BUOYS_FILE, DATA_DIR, DEMO_SEED, FORECAST_MODEL_PATH, LEVEL_NORM_M, LEVEL_THRESHOLD_M, LIBRARY_DIR,
+                    METHANE_NORM_NMOL, METHANE_THRESHOLD_NMOL,
                     MODEL_PATH, NEAREST_BUOY_KM, SALINITY_NORM, SALINITY_THRESHOLD, SEAL_WINDOW_H, WATER_COOLDOWN_MIN)
 
 AUDIO_DIR = DATA_DIR / "audio"
@@ -56,6 +59,7 @@ class SoundLabel(str, Enum):
 class WaterEventType(str, Enum):
     illegal_discharge = "illegal_discharge"
     level_anomaly = "level_anomaly"
+    gas_seep = "gas_seep"  # сверх контракта v2: метан в воде выше порога (датчик буя)
 
 
 class Geo(BaseModel):
@@ -151,6 +155,7 @@ class WaterDetails(BaseModel):
     salinity_delta: Optional[float] = None
     level_delta_m: Optional[float] = None
     confidence: Optional[float] = None
+    methane_nmol: Optional[float] = None
 
 
 class WaterSource(BaseModel):
@@ -519,6 +524,7 @@ class TelemetryIn(BaseModel):
     buoy_id: str = Field(examples=["b-003"])
     water_temp_c: Optional[float] = Field(None, ge=-5, le=40, examples=[11.4])
     level_m: Optional[float] = Field(None, ge=-40, le=0, examples=[-28.9], description="уровень, м (Балтийская система)")
+    methane_nmol: Optional[float] = Field(None, ge=0, le=100000, examples=[12.0], description="растворённый метан, нмоль/л")
     timestamp: Optional[str] = Field(None, examples=["2026-11-12T12:00:00Z"])
 
 
@@ -527,8 +533,12 @@ class TelemetryIn(BaseModel):
 def post_telemetry(body: TelemetryIn):
     require_buoy(body.buoy_id)
     ts = norm_ts(body.timestamp, "timestamp") or now_iso()
-    record = storage.add_telemetry(new_id("tel"), body.buoy_id, ts, body.water_temp_c, body.level_m)
+    record = storage.add_telemetry(new_id("tel"), body.buoy_id, ts, body.water_temp_c, body.level_m, body.methane_nmol)
     event = None
+    if body.methane_nmol is not None and body.methane_nmol >= METHANE_THRESHOLD_NMOL:
+        confidence = round(min(0.99, 0.6 + 0.1 * body.methane_nmol / METHANE_THRESHOLD_NMOL), 2)
+        event = storage.add_water_event(new_id("wtr"), "gas_seep", BUOYS[body.buoy_id]["geo"], ts,
+                                        {"methane_nmol": body.methane_nmol, "confidence": confidence}, buoy_id=body.buoy_id)
     if body.level_m is not None and abs(body.level_m - LEVEL_NORM_M) >= LEVEL_THRESHOLD_M:
         delta = round(body.level_m - LEVEL_NORM_M, 2)
         confidence = round(min(0.99, 0.55 + 0.15 * abs(delta) / LEVEL_THRESHOLD_M), 2)
@@ -586,6 +596,39 @@ def get_water_event_context(event_id: str, minutes: float = Query(5, ge=1, le=12
     if not ev:
         raise ApiError(404, "not_found", "Water event not found")
     return analytics.context("water", ev, BUOYS, distance_km, minutes)
+
+
+# ---------- Гибель тюленей: находки и расследование (сверх контракта v2) ----------
+class CarcassIn(BaseModel):
+    geo: Geo
+    count: int = Field(1, ge=1, le=10000, description="сколько туш в этом месте")
+    condition: str = Field("moderate", description="fresh — свежая | moderate — средней давности | decomposed — разложившаяся")
+    found_at: Optional[str] = Field(None, examples=["2026-11-12T08:00:00Z"])
+    note: Optional[str] = Field(None, max_length=500)
+
+
+@app.post("/api/v1/carcasses", status_code=201, tags=["seal-mortality"],
+          summary="Находка погибших тюленей на берегу (инспектор, волонтёр)")
+def post_carcass(body: CarcassIn):
+    if body.condition not in investigation.CONDITIONS:
+        raise ApiError(400, "bad_request", "condition must be fresh | moderate | decomposed")
+    found_at = norm_ts(body.found_at, "found_at") or now_iso()
+    return storage.add_carcass(new_id("car"), found_at, body.geo.model_dump(), body.count, body.condition, body.note)
+
+
+@app.get("/api/v1/carcasses", tags=["seal-mortality"], summary="Находки погибших тюленей")
+def list_carcasses(limit: int = Query(100, ge=1, le=1000)):
+    items = storage.list_carcasses(limit)
+    return {"total": sum(c["count"] for c in items), "carcasses": items}
+
+
+@app.get("/api/v1/carcasses/{carcass_id}/investigation", responses=NOT_FOUND, tags=["seal-mortality"],
+         summary="Где и когда животное могло погибнуть и что в это время фиксировали буи → версии")
+def get_investigation(carcass_id: str):
+    c = storage.get_carcass(carcass_id)
+    if not c:
+        raise ApiError(404, "not_found", "Carcass report not found")
+    return investigation.investigate(c, BUOYS, distance_km)
 
 
 @app.get("/api/v1/seals", tags=["analytics"], summary="Тюлени: где слышны, оценка численности, куда дрейфуют")

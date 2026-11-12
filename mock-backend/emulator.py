@@ -7,6 +7,7 @@
   POST /send/satellite — снимок из sat_library/ + координаты → POST {BACKEND}/api/v1/satellite
   POST /send/telemetry — температура воды и уровень → POST {BACKEND}/api/v1/telemetry
   /scenario/history    — заготовленные сутки работы пяти буёв (scenarios.py) → на бэкенд
+  /scenario/mortality  — массовая гибель тюленей: 3 суток данных буёв (метан, ночные лодки) и находки туш
   /scenario/poacher    — живой сценарий «браконьер» по шагам; ход — GET /scenario/status
                           (оба работают и как GET: достаточно открыть адрес в браузере)
   При запуске: если на бэкенде пусто — эмулятор сам отправляет историю за сутки (AUTO_HISTORY=0 — не надо).
@@ -215,9 +216,11 @@ async def send_telemetry(
     buoy_id: str = Query(_BUOYS[0], description="От какого буя", json_schema_extra=dropdown(_BUOYS)),
     water_temp_c: Optional[float] = Query(11.4, description="Температура воды, °C"),
     level_m: Optional[float] = Query(-28.9, description="Уровень, м (Балтийская система); отклонение ≥0.3 м → аномалия"),
+    methane_nmol: Optional[float] = Query(10.0, description="Растворённый метан, нмоль/л; ≥50 → «выброс газа»"),
     timestamp: Optional[str] = Query(None, description="ISO-8601; пусто = сейчас"),
 ):
-    payload = {"buoy_id": buoy_id, "water_temp_c": water_temp_c, "level_m": level_m, "timestamp": timestamp or now_iso()}
+    payload = {"buoy_id": buoy_id, "water_temp_c": water_temp_c, "level_m": level_m, "methane_nmol": methane_nmol,
+               "timestamp": timestamp or now_iso()}
     return await send("telemetry", "/api/v1/telemetry", payload, json=payload)
 
 
@@ -235,8 +238,13 @@ def build(step: dict, ts: str) -> tuple[str, str, dict, dict]:
         payload = {"buoy_id": step["buoy_id"], "salinity": step["salinity"], "timestamp": ts}
         return kind, "/api/v1/salinity", payload, {"json": payload}
     if kind == "telemetry":
-        payload = {"buoy_id": step["buoy_id"], "water_temp_c": step["water_temp_c"], "level_m": step["level_m"], "timestamp": ts}
+        payload = {"buoy_id": step["buoy_id"], "water_temp_c": step["water_temp_c"], "level_m": step["level_m"],
+                   "methane_nmol": step.get("methane_nmol"), "timestamp": ts}
         return kind, "/api/v1/telemetry", payload, {"json": payload}
+    if kind == "carcass":  # находка туши — отправляет инспектор с берега, не буй
+        payload = {"geo": {"lat": step["lat"], "lon": step["lon"]}, "count": step["count"],
+                   "condition": step["condition"], "found_at": ts, "note": step.get("note")}
+        return kind, "/api/v1/carcasses", payload, {"json": payload}
     f = IMAGES / step["file"]
     sent = {"file_name": f.name, "geo": {"lat": step["lat"], "lon": step["lon"]}, "timestamp": ts}
     return kind, "/api/v1/satellite", sent, {
@@ -289,8 +297,9 @@ async def auto_history():
         total = await backend_event_count()
         if total is not None:
             if total == 0:
-                print("[auto] бэкенд пустой — отправляю историю за сутки")
+                print("[auto] бэкенд пустой — отправляю историю за сутки и сценарий гибели тюленей")
                 await send_history(24)
+                await send_steps("mortality", scenarios.mortality_steps())
             else:
                 print(f"[auto] на бэкенде уже {total} событий — историю не отправляю")
             return
@@ -316,7 +325,25 @@ async def scenario_history(hours: int = Query(24, ge=1, le=24, description="За
 
 
 async def send_history(hours: int) -> JSONResponse:
-    steps = scenarios.history_steps(hours)
+    return await send_steps("history", scenarios.history_steps(hours), hours=hours)
+
+
+@app.api_route("/scenario/mortality", methods=["GET", "POST"], tags=["сценарии"],
+               summary="Массовая гибель тюленей: 3 суток данных буёв до находки + находки туш на берегу")
+async def scenario_mortality(force: bool = Query(False, description="Отправить, даже если находки уже есть")):
+    """После отправки откройте на дашборде вкладку «Гибель тюленей» — бэкенд сам восстановит,
+    где животные могли погибнуть, и сопоставит это с данными буёв, ветром и землетрясениями."""
+    try:
+        r = await app.state.http.get(BACKEND_URL + "/api/v1/carcasses?limit=1", timeout=5)
+        existing = len(r.json().get("carcasses", [])) if r.status_code == 200 else 0
+    except (httpx.HTTPError, ValueError):
+        return error(502, "backend_unavailable", f"Cannot reach backend at {BACKEND_URL}")
+    if existing and not force:
+        return {"sent": False, "message": "Находки туш на бэкенде уже есть — сценарий не отправлен. Повторить: ?force=true"}
+    return await send_steps("mortality", scenarios.mortality_steps())
+
+
+async def send_steps(name: str, steps: list[dict], **extra) -> JSONResponse:
     now = datetime.now(timezone.utc)
     sem = asyncio.Semaphore(8)
 
@@ -330,9 +357,9 @@ async def send_history(hours: int) -> JSONResponse:
     results = await asyncio.gather(*(one(s) for s in steps))
     report = summarize(results)
     ok = all(v.get("failed", 0) == 0 for v in report["by_kind"].values())
-    print(f"[history] отправлено {len(steps)} → " + ", ".join(f"{k}: {v}" for k, v in report["by_kind"].items()))
-    return JSONResponse(status_code=200 if ok else 502, content={"backend_url": BACKEND_URL, "hours": hours, "sent": True,
-                                                                 "all_accepted": ok, **report})
+    print(f"[{name}] отправлено {len(steps)} → " + ", ".join(f"{k}: {v}" for k, v in report["by_kind"].items()))
+    return JSONResponse(status_code=200 if ok else 502, content={"backend_url": BACKEND_URL, "scenario": name, **extra,
+                                                                 "sent": True, "all_accepted": ok, **report})
 
 
 SCENARIO = {"running": False, "started_at": None, "steps": []}

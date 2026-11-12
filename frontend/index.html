@@ -30,6 +30,7 @@
         <button class="tab active" data-tab="map" role="tab">Карта</button>
         <button class="tab" data-tab="crit" role="tab">Инциденты <span class="count" id="crit-count" hidden></span></button>
         <button class="tab" data-tab="all" role="tab">Все события</button>
+        <button class="tab" data-tab="mortality" role="tab">Гибель тюленей</button>
         <button class="tab" data-tab="forecast" role="tab">Прогноз</button>
         <button class="tab" data-tab="about" role="tab">О системе</button>
       </nav>
@@ -39,6 +40,9 @@
       </section>
       <section class="panel" id="panel-all" hidden>
         <div class="list" id="list-all" data-empty="Событий пока нет"></div>
+      </section>
+      <section class="panel" id="panel-mortality" hidden>
+        <div class="mortality" id="mortality"></div>
       </section>
       <section class="panel" id="panel-forecast" hidden>
         <div class="forecast" id="forecast"></div>

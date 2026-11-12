@@ -28,6 +28,9 @@ CREATE TABLE IF NOT EXISTS water_events (
 CREATE TABLE IF NOT EXISTS telemetry (
     telemetry_id TEXT PRIMARY KEY, buoy_id TEXT, timestamp TEXT, water_temp_c REAL, level_m REAL
 );
+CREATE TABLE IF NOT EXISTS carcasses (
+    carcass_id TEXT PRIMARY KEY, found_at TEXT, lat REAL, lon REAL, count INTEGER, condition TEXT, note TEXT
+);
 CREATE INDEX IF NOT EXISTS idx_sound_ts ON sound_events (timestamp);
 CREATE INDEX IF NOT EXISTS idx_tel_buoy_ts ON telemetry (buoy_id, timestamp);
 CREATE INDEX IF NOT EXISTS idx_meas_buoy_ts ON measurements (buoy_id, timestamp);
@@ -44,6 +47,12 @@ def init(path: Path) -> None:
     _db = sqlite3.connect(str(path), check_same_thread=False)
     _db.row_factory = sqlite3.Row
     _db.executescript(SCHEMA)
+    # колонки, добавленные позже: в старой базе дописываем их на месте
+    for table, column in [("telemetry", "methane_nmol"), ("water_events", "methane_nmol")]:
+        cols = {r[1] for r in _db.execute(f"PRAGMA table_info({table})")}
+        if column not in cols:
+            _db.execute(f"ALTER TABLE {table} ADD COLUMN {column} REAL")
+    _db.commit()
 
 
 def _query(sql: str, args=()) -> list[sqlite3.Row]:
@@ -137,11 +146,12 @@ def nearest_salinity(buoy_id: str, timestamp: str) -> Optional[float]:
 
 
 # ---------- телеметрия буя (температура воды, уровень) ----------
-def add_telemetry(telemetry_id: str, buoy_id: str, timestamp: str,
-                  water_temp_c: Optional[float], level_m: Optional[float]) -> dict:
-    _execute("INSERT INTO telemetry VALUES (?, ?, ?, ?, ?)", (telemetry_id, buoy_id, timestamp, water_temp_c, level_m))
+def add_telemetry(telemetry_id: str, buoy_id: str, timestamp: str, water_temp_c: Optional[float],
+                  level_m: Optional[float], methane_nmol: Optional[float] = None) -> dict:
+    _execute("INSERT INTO telemetry (telemetry_id, buoy_id, timestamp, water_temp_c, level_m, methane_nmol) "
+             "VALUES (?, ?, ?, ?, ?, ?)", (telemetry_id, buoy_id, timestamp, water_temp_c, level_m, methane_nmol))
     return {"telemetry_id": telemetry_id, "buoy_id": buoy_id, "timestamp": timestamp,
-            "water_temp_c": water_temp_c, "level_m": level_m}
+            "water_temp_c": water_temp_c, "level_m": level_m, "methane_nmol": methane_nmol}
 
 
 def list_telemetry(buoy_id, ts_from, limit: int) -> list[dict]:
@@ -153,7 +163,7 @@ def list_telemetry(buoy_id, ts_from, limit: int) -> list[dict]:
 
 def last_value(buoy_id: str, column: str) -> Optional[dict]:
     """Последнее непустое значение телеметрии: {'value', 'timestamp'}. column — water_temp_c | level_m."""
-    assert column in ("water_temp_c", "level_m")
+    assert column in ("water_temp_c", "level_m", "methane_nmol")
     rows = _query(f"SELECT {column} AS value, timestamp FROM telemetry WHERE buoy_id = ? AND {column} IS NOT NULL "
                   "ORDER BY timestamp DESC, rowid DESC LIMIT 1", (buoy_id,))
     return dict(rows[0]) if rows else None
@@ -171,7 +181,7 @@ def _water(row: sqlite3.Row) -> dict:
         "type": row["type"],
         "geo": {"lat": row["lat"], "lon": row["lon"]},
         "timestamp": row["timestamp"],
-        "details": {k: row[k] for k in ("salinity", "salinity_delta", "level_delta_m", "confidence")},
+        "details": {k: row[k] for k in ("salinity", "salinity_delta", "level_delta_m", "confidence", "methane_nmol")},
         "source": {"buoy_id": row["buoy_id"], "image_id": row["image_id"]},
     }
 
@@ -179,9 +189,10 @@ def _water(row: sqlite3.Row) -> dict:
 def add_water_event(event_id: str, type_: str, geo: dict, timestamp: str, details: dict,
                     buoy_id: Optional[str] = None, image_id: Optional[str] = None) -> dict:
     _execute(
-        "INSERT INTO water_events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO water_events (event_id, type, lat, lon, timestamp, salinity, salinity_delta, level_delta_m, "
+        "confidence, buoy_id, image_id, methane_nmol) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (event_id, type_, geo["lat"], geo["lon"], timestamp, details.get("salinity"), details.get("salinity_delta"),
-         details.get("level_delta_m"), details.get("confidence"), buoy_id, image_id),
+         details.get("level_delta_m"), details.get("confidence"), buoy_id, image_id, details.get("methane_nmol")),
     )
     return get_water_event(event_id)
 
@@ -207,3 +218,24 @@ def recent_buoy_discharge(buoy_id: str, timestamp: str, cooldown_min: float) -> 
         (buoy_id, timestamp, cooldown_min * 60),
     )
     return _water(rows[0]) if rows else None
+
+
+# ---------- находки погибших тюленей ----------
+def _carcass(row: sqlite3.Row) -> dict:
+    return {"carcass_id": row["carcass_id"], "found_at": row["found_at"], "geo": {"lat": row["lat"], "lon": row["lon"]},
+            "count": row["count"], "condition": row["condition"], "note": row["note"]}
+
+
+def add_carcass(carcass_id: str, found_at: str, geo: dict, count: int, condition: str, note: Optional[str]) -> dict:
+    _execute("INSERT INTO carcasses VALUES (?, ?, ?, ?, ?, ?, ?)",
+             (carcass_id, found_at, geo["lat"], geo["lon"], count, condition, note))
+    return get_carcass(carcass_id)
+
+
+def get_carcass(carcass_id: str) -> Optional[dict]:
+    rows = _query("SELECT * FROM carcasses WHERE carcass_id = ?", (carcass_id,))
+    return _carcass(rows[0]) if rows else None
+
+
+def list_carcasses(limit: int) -> list[dict]:
+    return [_carcass(r) for r in _query("SELECT * FROM carcasses ORDER BY found_at DESC, rowid DESC LIMIT ?", (limit,))]

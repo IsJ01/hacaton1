@@ -182,6 +182,9 @@
     getWaterEvent: (id) => { const e = WATER_EVENTS.find((x) => x.event_id === id); return e ? ok(e) : notFound(); },
     getContext: (kind, id, minutes) => ok({ event_id: id, kind, window_min: minutes, total: 0, counts: {}, buoys: [],
       items: [{ kind, event_id: id, label: 'boat', confidence: 0.9, buoy_id: 'b-001', delta_sec: 0, distance_km: 0, is_origin: true }] }),
+    getCarcasses: () => ok({ total: 0, carcasses: [] }),
+    postCarcass: () => Promise.reject(new Error('в режиме заглушек недоступно')),
+    getInvestigation: () => Promise.reject(new Error('в режиме заглушек недоступно')),
     getSeals: () => ok({ generated_at: ago(0), window_h: 24, total_detections: 3, estimate_min: 1, method: 'заглушка',
       buoys: [{ buoy_id: 'b-002', detections: 2, last_seen: ago(42) }, { buoy_id: 'b-004', detections: 1, last_seen: ago(130) }], groups: [] }),
     getModelInfo: () => ok({

@@ -32,7 +32,7 @@ window.CONFIG = {
   // ---------- КРИТИЧЕСКИЕ СОБЫТИЯ ----------
   // Что попадает во вкладку «Критические».
   CRITICAL_SOUND_LABELS: ['gunshot', 'boat'],
-  CRITICAL_WATER_TYPES: ['illegal_discharge', 'level_anomaly'],
+  CRITICAL_WATER_TYPES: ['illegal_discharge', 'level_anomaly', 'gas_seep'],
 
   // ---------- ЗАПИСЬ ЗВУКА ----------
   RECORD_MAX_SEC: 30,    // автостоп записи
@@ -68,5 +68,5 @@ window.CONFIG = {
 
   // ---------- ПОДПИСИ ----------
   SOUND_LABELS: { seal: 'Тюлень', boat: 'Лодка', gunshot: 'Выстрел', anomaly: 'Аномалия' },
-  WATER_TYPES: { illegal_discharge: 'Незаконный сброс', level_anomaly: 'Аномалия уровня' },
+  WATER_TYPES: { illegal_discharge: 'Незаконный сброс', level_anomaly: 'Аномалия уровня', gas_seep: 'Выброс газа' },
 };

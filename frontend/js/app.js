@@ -139,13 +139,14 @@
 
   // ---------- вкладки ----------
   let map;
-  const TABS = ['map', 'crit', 'all', 'forecast', 'about'];
+  const TABS = ['map', 'crit', 'all', 'mortality', 'forecast', 'about'];
   function showTab(name) {
     document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
     TABS.forEach((n) => ($('#panel-' + n).hidden = n !== name));
     if (name === 'map') map.invalidateSize();
     if (name === 'forecast') loadForecast();
     if (name === 'about') loadAbout();
+    if (name === 'mortality') renderMortality();
   }
   document.querySelectorAll('.tab').forEach((t) => t.addEventListener('click', () => showTab(t.dataset.tab)));
 
@@ -156,6 +157,8 @@
   const zoneLayer = L.layerGroup().addTo(map);
   const forecastLayer = L.layerGroup();
   const sealLayer = L.layerGroup().addTo(map);
+  const carcassLayer = L.layerGroup().addTo(map);
+  const driftLayer = L.layerGroup().addTo(map);
   const listenLayer = L.layerGroup().addTo(map);
   const buoyLayer = L.layerGroup().addTo(map);
   const waterLayer = L.layerGroup().addTo(map);
@@ -270,6 +273,7 @@
       '<div><dt>Солёность</dt><dd>' + num(d.salinity, 2, '‰') + '</dd></div>' +
       '<div><dt>Вода</dt><dd>' + num(d.water_temp_c, 1, '°C') + '</dd></div>' +
       '<div><dt>Уровень</dt><dd>' + num(d.level_m, 2, 'м') + '</dd></div>' +
+      '<div><dt>Метан</dt><dd>' + num(d.methane_nmol, 0, 'нмоль/л') + '</dd></div>' +
       '<div><dt>Слышит</dt><dd>' + num(d.listen_radius_km, 0, 'км') + '</dd></div>' +
       '</dl>' + (d.telemetry_at ? '<div class="demo-note">Телеметрия: ' + fmtTime(d.telemetry_at) + '</div>' : '');
   }
@@ -808,6 +812,7 @@
         (sal.length ? '<div class="bs-line sub sal">Солёность ' + sal[sal.length - 1].salinity.toFixed(2) + ' ‰ ' + sparkline(sal) + '</div>' : '') +
         '<div class="bs-line sub">' + [typeof d.water_temp_c === 'number' ? 'вода ' + d.water_temp_c.toFixed(1) + ' °C' : '',
           typeof d.level_m === 'number' ? 'уровень ' + d.level_m.toFixed(2) + ' м' : '',
+          typeof d.methane_nmol === 'number' ? 'метан ' + d.methane_nmol.toFixed(0) + ' нмоль/л' : '',
           d.listen_radius_km ? 'слышит ' + d.listen_radius_km + ' км' : ''].filter(Boolean).join(' · ') + '</div>';
     });
   }
@@ -1070,6 +1075,141 @@
   const card = (t, d, rows) => '<div class="about-card"><h3>' + esc(t) + '</h3><p>' + esc(d) + '</p><dl class="kv">' +
     rows.map(([k, v]) => '<dt>' + esc(k) + '</dt><dd>' + esc(v) + '</dd>').join('') + '</dl></div>';
 
+  // ---------- гибель тюленей: находки туш и расследование ----------
+  // Туши находят через дни после гибели — причину уже не установить. Бэкенд восстанавливает обратный дрейф
+  // до вероятного места гибели и сопоставляет его с данными буёв, ветром и землетрясениями (GET …/investigation).
+  const COND = { fresh: 'свежая (0,5–2 сут)', moderate: 'средней давности (2–5 сут)', decomposed: 'разложившаяся (5–12 сут)' };
+  let invId = null, inv = null, pickMode = false;
+  state.carcasses = [];
+
+  const carcassIcon = (c, on) => L.divIcon({ className: '', iconSize: [0, 0],
+    html: '<div class="carc-mk' + (on ? ' on' : '') + '"><b>' + c.count + '</b></div>' });
+  function renderCarcasses() {
+    carcassLayer.clearLayers();
+    state.carcasses.forEach((c) => {
+      L.marker([c.geo.lat, c.geo.lon], { icon: carcassIcon(c, c.carcass_id === invId), zIndexOffset: 800 })
+        .bindTooltip('Найдено погибших тюленей: ' + c.count + ' · ' + fmtTime(c.found_at) + (c.note ? ' · ' + esc(c.note) : ''))
+        .on('click', () => { showTab('mortality'); openInvestigation(c.carcass_id); })
+        .addTo(carcassLayer);
+    });
+  }
+
+  function renderMortality() {
+    const box = $('#mortality');
+    const total = state.carcasses.reduce((a, c) => a + c.count, 0);
+    box.innerHTML =
+      '<div class="mort-intro"><h2>Гибель тюленей</h2><p>Каждую осень на побережье Дагестана находят сотни погибших каспийских тюленей, ' +
+      'а причину установить не удаётся: туши выносит на берег через дни, ткани разложены. Версии спорят — выброс газа со дна, ' +
+      'сети браконьеров, загрязнение. Система восстанавливает, <b>где и когда</b> животное могло погибнуть, и поднимает всё, что в это время фиксировали буи.</p></div>' +
+      '<div class="mort-grid"><div class="mort-list">' +
+      '<div class="mort-head"><b>Находки · ' + total + ' туш</b><button class="btn primary sm" id="carc-add">+ Находка</button></div>' +
+      '<form class="carc-form" id="carc-form" hidden>' +
+      '<div class="row"><label>Широта<input name="lat" type="number" step="0.0001" value="43.30" required></label>' +
+      '<label>Долгота<input name="lon" type="number" step="0.0001" value="47.57" required></label></div>' +
+      '<button type="button" class="btn sm" id="carc-pick">Указать на карте</button>' +
+      '<div class="row"><label>Сколько туш<input name="count" type="number" min="1" value="1" required></label>' +
+      '<label>Состояние<select name="condition">' + Object.entries(COND).map(([k, v]) => '<option value="' + k + '">' + v + '</option>').join('') + '</select></label></div>' +
+      '<label>Заметка<input name="note" maxlength="200" placeholder="например: рядом обрывки сети"></label>' +
+      '<div class="row"><button class="btn primary" type="submit">Сохранить и расследовать</button><button class="btn" type="button" id="carc-cancel">Отмена</button></div></form>' +
+      (state.carcasses.length ? state.carcasses.map((c) =>
+        '<button class="carc' + (c.carcass_id === invId ? ' on' : '') + '" data-carc="' + esc(c.carcass_id) + '"><b>' + c.count + ' туш</b>' +
+        '<span>' + fmtTime(c.found_at) + ' · ' + esc(COND[c.condition] || c.condition) + '</span>' + (c.note ? '<span class="sub">' + esc(c.note) + '</span>' : '') + '</button>').join('')
+        : '<p class="sub">Находок пока нет. Эмулятор: /scenario/mortality, или добавьте вручную.</p>') +
+      '</div><div class="mort-report" id="mort-report">' + (inv ? reportHtml(inv) : '<p class="sub">Выберите находку слева — система восстановит, где животные могли погибнуть.</p>') + '</div></div>';
+  }
+
+  async function openInvestigation(id) {
+    invId = id;
+    renderCarcasses();
+    renderMortality();
+    $('#mort-report').innerHTML = '<p class="sub">Восстанавливаем дрейф и поднимаем данные буёв…</p>';
+    try {
+      inv = await Api.getInvestigation(id);
+      if (invId !== id) return;
+      $('#mort-report').innerHTML = reportHtml(inv);
+      drawDrift(inv);
+    } catch (e) {
+      $('#mort-report').innerHTML = '<p class="err-text">Не удалось: ' + esc(e.message) + '</p>';
+    }
+  }
+
+  const HYP_COLOR = { nets: '#d93025', gas: '#7c4dff', pollution: '#b06000' };
+  function reportHtml(d) {
+    const e = d.evidence, w = d.death_window;
+    const fmtD = (iso) => new Date(iso).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+    return '<div class="verdict-card"><span class="sub">Вывод системы</span><h3>' + esc(d.verdict) + '</h3>' +
+      '<p>' + d.carcass.count + ' туш · ' + esc(d.condition_ru) + ' · гибель вероятно между <b>' + fmtD(w.from) + '</b> и <b>' + fmtD(w.to) + '</b></p>' +
+      '<button class="btn sm" id="drift-show">Показать дрейф на карте</button></div>' +
+      '<h3>Версии</h3>' + d.hypotheses.map((h) =>
+        '<div class="hyp"><div class="hyp-head"><b>' + esc(h.title) + '</b><span>' + Math.round(h.score * 100) + '%</span></div>' +
+        '<div class="hyp-bar"><i style="width:' + Math.max(2, h.score * 100) + '%;background:' + (HYP_COLOR[h.id] || '#5f6368') + '"></i></div>' +
+        (h.evidence.length ? '<ul>' + h.evidence.map((x) => '<li>' + esc(x) + '</li>').join('') + '</ul>' : '<div class="sub">улик нет</div>') +
+        '<div class="sub">Проверить: ' + esc(h.check) + '</div></div>').join('') +
+      '<h3>Данные, на которые опирается вывод</h3>' +
+      '<dl class="kv">' +
+      '<dt>Буи рядом с коридором</dt><dd>' + (d.buoys_in_range.length ? d.buoys_in_range.map((b) => esc(b.name) + ' (' + b.distance_km + ' км)').join(', ') : 'нет') + '</dd>' +
+      '<dt>Покрытие данными</dt><dd>' + Math.round(d.coverage * 100) + '% часов окна гибели</dd>' +
+      '<dt>Метан, максимум</dt><dd>' + (e.methane_max ? e.methane_max.value + ' нмоль/л · ' + esc(buoyName(e.methane_max.buoy_id)) : '—') + '</dd>' +
+      '<dt>Штиль</dt><dd>' + e.calm_hours + ' ч подряд</dd>' +
+      '<dt>Землетрясения (' + esc(e.earthquake_source) + ')</dt><dd>' + (e.earthquakes.length ? e.earthquakes.map((q) => 'M' + q.mag + ' · ' + q.distance_km + ' км · ' + fmtD(q.time)).join('<br>') : 'нет M≥2.5 в 200 км') + '</dd>' +
+      '<dt>Ветер</dt><dd>' + (d.drift.wind_source === 'open-meteo' ? 'Open-Meteo, реальные данные' : 'климатическая норма') + '</dd>' +
+      '<dt>Модель дрейфа</dt><dd>' + esc(d.drift.assumptions) + '</dd></dl>' +
+      (e.events.length ? '<h3>События буёв в окне</h3><div class="ev-chips">' + e.events.map((x) =>
+        '<button class="badge ' + esc(x.label) + '" data-ev-kind="' + x.kind + '" data-ev-id="' + esc(x.event_id) + '">' +
+        esc(x.kind === 'sound' ? soundName(x.label) : waterName(x.label)) + ' · ' + esc(buoyName(x.buoy_id)) + ' · ' + fmtD(x.timestamp) + '</button>').join('') + '</div>' : '') +
+      '<p class="sub mort-note">' + esc(d.note) + '</p>';
+  }
+
+  function drawDrift(d) {
+    driftLayer.clearLayers();
+    const pts = d.drift.points.map((p) => [p.lat, p.lon]);
+    L.polyline(pts, { className: 'drift-line', interactive: false }).addTo(driftLayer);
+    d.drift.zone.forEach((p, i) => {
+      if (i % 8) return; // каждый восьмой час — иначе круги сливаются
+      L.circle([p.lat, p.lon], { radius: p.spread_km * 1000, className: 'drift-zone', interactive: false }).addTo(driftLayer);
+    });
+    const mid = d.drift.zone[Math.floor(d.drift.zone.length / 2)];
+    if (mid) {
+      L.marker([mid.lat, mid.lon], { icon: L.divIcon({ className: '', iconSize: [0, 0], html: '<div class="drift-label">вероятное место гибели</div>' }), interactive: false }).addTo(driftLayer);
+    }
+    d.evidence.earthquakes.forEach((q) => {
+      L.circleMarker([q.geo.lat, q.geo.lon], { radius: 4 + (q.mag || 0) * 2, className: 'quake' })
+        .bindTooltip('Землетрясение M' + q.mag + ' · ' + esc(q.region) + ' · ' + fmtTime(q.time)).addTo(driftLayer);
+    });
+  }
+
+  $('#mortality').addEventListener('click', (e) => {
+    const c = e.target.closest('[data-carc]');
+    if (c) openInvestigation(c.dataset.carc);
+    if (e.target.id === 'carc-add') $('#carc-form').hidden = false;
+    if (e.target.id === 'carc-cancel') $('#carc-form').hidden = true;
+    if (e.target.id === 'carc-pick') { pickMode = true; showTab('map'); toast('info', 'Укажите место находки', 'Кликните по карте у берега'); }
+    if (e.target.id === 'drift-show' && inv) { showTab('map'); drawDrift(inv); map.fitBounds(L.latLngBounds(inv.drift.points.map((p) => [p.lat, p.lon])).pad(0.4)); }
+    const ev = e.target.closest('[data-ev-id]');
+    if (ev) openEventById(ev.dataset.evKind, ev.dataset.evId);
+  });
+  $('#mortality').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    try {
+      const c = await Api.postCarcass({ geo: { lat: +f.get('lat'), lon: +f.get('lon') }, count: +f.get('count'),
+        condition: f.get('condition'), note: f.get('note') || null });
+      state.sig.carcasses = null;
+      await refresh();
+      openInvestigation(c.carcass_id);
+    } catch (err) {
+      toast('info', 'Находка не сохранилась', err.message);
+    }
+  });
+  map.on('click', (e) => {
+    if (!pickMode) return;
+    pickMode = false;
+    showTab('mortality');
+    $('#carc-form').hidden = false;
+    $('#carc-form').lat.value = e.latlng.lat.toFixed(4);
+    $('#carc-form').lon.value = e.latlng.lng.toFixed(4);
+  });
+
   // ---------- загрузка данных ----------
   function changed(key, data) {
     const sig = JSON.stringify(data);
@@ -1104,6 +1244,7 @@
         Api.getBuoyStatus().catch(() => ({ buoys: [] })),
         Api.getSeals({ hours: C.SEAL_WINDOW_H }).catch(() => null),
       ]);
+      const carc = await Api.getCarcasses().catch(() => null);
       const sal = await Promise.all((b.buoys || []).map((x) => Api.getSalinity({ buoy_id: x.buoy_id, limit: 48 }).catch(() => ({ measurements: [] }))));
       const salinity = {};
       (b.buoys || []).forEach((x, i) => (salinity[x.buoy_id] = sortAsc(sal[i].measurements || [])));
@@ -1116,6 +1257,7 @@
       state.status = {};
       (st.buoys || []).forEach((x) => (state.status[x.buoy_id] = x));
       if (changed('seals', seals)) renderSeals();
+      if (changed('carcasses', (carc && carc.carcasses) || [])) { renderCarcasses(); if (!$('#panel-mortality').hidden) renderMortality(); }
       if (cb) { if (!rec) renderBuoyList(); renderBuoyMarkers(); }
       if (cb || cw) renderWaterMarkers();
       if (cb) $('#list-all').replaceChildren();

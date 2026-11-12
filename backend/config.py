@@ -38,6 +38,17 @@ WEATHER_TIMEOUT_SEC = float(os.getenv("WEATHER_TIMEOUT_SEC", "4"))
 LEVEL_NORM_M = float(os.getenv("LEVEL_NORM_M", "-28.9"))            # уровень Каспия, м (Балтийская система)
 LEVEL_THRESHOLD_M = float(os.getenv("LEVEL_THRESHOLD_M", "0.3"))    # отклонение, с которого → level_anomaly
 
+# --- растворённый метан (телеметрия буя) ---
+METHANE_NORM_NMOL = float(os.getenv("METHANE_NORM_NMOL", "10"))          # фон, нмоль/л
+METHANE_THRESHOLD_NMOL = float(os.getenv("METHANE_THRESHOLD_NMOL", "50"))  # выше → WaterEvent gas_seep (выброс газа)
+
+# --- расследование гибели тюленей (обратный дрейф туши) — допущения, уточняются с гидрологами ---
+CURRENT_SPEED_MS = float(os.getenv("CURRENT_SPEED_MS", "0.10"))   # вдольбереговое течение у Дагестана, м/с
+CURRENT_TO_DEG = float(os.getenv("CURRENT_TO_DEG", "165"))        # куда течёт (вдоль берега на юг), градусы
+LEEWAY = float(os.getenv("LEEWAY", "0.03"))                       # снос ветром: доля скорости ветра (1–4 %)
+SEISMIC_URL = os.getenv("SEISMIC_URL", "https://www.seismicportal.eu/fdsnws/event/1/query")  # каталог EMSC
+USE_SEISMIC_API = os.getenv("USE_SEISMIC_API", "1") == "1"
+
 # --- статус буя и соседи ---
 STATUS_WINDOW_H = float(os.getenv("STATUS_WINDOW_H", "24"))         # статус буя считается по событиям за это окно
 CRITICAL_LABELS = os.getenv("CRITICAL_LABELS", "gunshot,boat").split(",")  # звуки, после которых буй красный

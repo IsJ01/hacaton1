@@ -7,12 +7,17 @@
             тюлени смещаются от о. Тюлений (буй 5) к бую 4, затем к бую 3;
             ночью у буя 3 лодка и выстрел; у буёв 1 и 4 аномальные звуки;
             каждые 30 минут — солёность, температура воды и уровень от каждого буя; два чистых снимка.
+  mortality — массовая гибель тюленей (как каждую осень в Дагестане): данные буёв за 3 суток до находки
+            и две находки туш на берегу. У Аграханского залива перед гибелью — всплеск метана у буёв 3 и 4
+            (версия «выброс газа»), у Махачкалы — ночные лодки и выстрел у буя 1 (версия «сети и браконьеры»).
+            Ветер для обратного дрейфа и землетрясения бэкенд берёт из реальных открытых данных.
   poacher — живой сценарий «браконьер» (паузы в секундах между шагами):
             лодка у буя 1 → она же у буя 2 → выстрел у буя 2 → выстрел у буя 3 →
             солёность падает у буя 3 → спутник видит пятно там же.
 """
 import math
 import random
+from datetime import datetime, timedelta, timezone
 
 # координаты буёв (как в backend/buoys.json) — нужны для привязки спутниковых снимков
 BUOY_GEO = {
@@ -21,6 +26,7 @@ BUOY_GEO = {
 }
 SALINITY_NORM = 12.5   # ‰
 LEVEL_NORM = -28.9     # м, Балтийская система
+METHANE_BG = 10.0      # растворённый метан, нмоль/л (фон)
 
 # Файлы, которые модель бэкенда распознаёт уверенно (проверено через /api/v1/classify/upload).
 # Файлы *_01.wav / *_02.wav сделаны другим генератором — модель их путает, в сценариях не используем.
@@ -52,8 +58,8 @@ def history_steps(hours: int = 24) -> list[dict]:
             temp = 11.2 - 0.25 * bi + 0.6 * math.sin((i + 6) / 7.6) + rnd.uniform(-0.05, 0.05)  # севернее — холоднее
             level = LEVEL_NORM + 0.05 * math.sin(i / 4 + bi) + rnd.uniform(-0.01, 0.01)
             steps.append({"kind": "salinity", "minutes_ago": m, "buoy_id": buoy, "salinity": round(sal, 2)})
-            steps.append({"kind": "telemetry", "minutes_ago": m, "buoy_id": buoy,
-                          "water_temp_c": round(temp, 1), "level_m": round(level, 2)})
+            steps.append({"kind": "telemetry", "minutes_ago": m, "buoy_id": buoy, "water_temp_c": round(temp, 1),
+                          "level_m": round(level, 2), "methane_nmol": round(METHANE_BG + rnd.uniform(-2, 3), 1)})
 
     for m, f, (lat, lon) in [(1100, "clean_01.jpg", (44.30, 47.80)), (480, "clean_02.jpg", (43.55, 47.90))]:
         if m <= hours * 60:
@@ -70,3 +76,40 @@ POACHER = [
     {"pause": 6, "kind": "salinity", "buoy_id": "b-003", "salinity": 9.6, "note": "солёность у буя 3 упала — сброс"},
     {"pause": 5, "kind": "satellite", "file": "discharge_01.jpg", "lat": 43.73, "lon": 47.86, "note": "спутник видит пятно у буя 3"},
 ]
+
+
+def mortality_steps() -> list[dict]:
+    """Трое суток до находки (от 72 до 24 ч назад — дальше история за сутки) и сами находки туш."""
+    steps = []
+    rnd = random.Random(11)
+    for bi, buoy in enumerate(BUOY_GEO):
+        for i in range(144, 48, -1):  # каждые 30 минут, 72…24 ч назад
+            m = 30 * i
+            methane = METHANE_BG + rnd.uniform(-2, 3)
+            # всплеск метана у буёв 3 и 4 примерно 30 ч назад (у буя 4 сильнее — ближе к источнику)
+            if buoy in ("b-003", "b-004") and 1680 <= m <= 1920:
+                peak = 160 if buoy == "b-004" else 75
+                methane += peak * math.exp(-((m - 1800) / 70) ** 2)
+            steps.append({"kind": "telemetry", "minutes_ago": m, "buoy_id": buoy,
+                          "water_temp_c": round(11.4 - 0.25 * bi + 0.5 * math.sin(i / 7.6), 1),
+                          "level_m": round(LEVEL_NORM + 0.05 * math.sin(i / 4 + bi), 2), "methane_nmol": round(methane, 1)})
+            steps.append({"kind": "salinity", "minutes_ago": m, "buoy_id": buoy,
+                          "salinity": round(SALINITY_NORM + 0.3 * math.sin((i + bi * 5) / 6) + rnd.uniform(-0.08, 0.08), 2)})
+    # ночные лодки и выстрел у буя 1: трое суток назад, около 23:00 по местному времени (UTC+3)
+    now = datetime.now(timezone.utc)
+    night = (now + timedelta(hours=3)).replace(hour=23, minute=0, second=0, microsecond=0) - timedelta(days=3, hours=3)
+    base = int((now - night).total_seconds() // 60)
+    for shift, f in [(30, "boat_000.wav"), (0, "boat_001.wav"), (-50, "gunshot_000.wav"), (-110, "boat_002.wav")]:
+        steps.append({"kind": "sound", "minutes_ago": base + shift, "buoy_id": "b-001", "file": f})
+    # тюлени шли мимо буёв 3–4 в те же сутки
+    for m, b in [(2000, "b-004"), (1900, "b-004"), (1850, "b-003"), (1700, "b-003")]:
+        steps.append({"kind": "sound", "minutes_ago": m, "buoy_id": b, "file": SEAL_FILES[m % len(SEAL_FILES)]})
+    # находки на берегу (инспекторы обходят побережье утром)
+    steps += [
+        {"kind": "carcass", "minutes_ago": 300, "lat": 43.80, "lon": 47.80, "count": 37, "condition": "fresh",
+         "note": "Аграханский полуостров, восточный берег; без видимых травм"},
+        {"kind": "carcass", "minutes_ago": 240, "lat": 43.02, "lon": 47.56, "count": 12, "condition": "moderate",
+         "note": "пляж Махачкалы; рядом обрывки сети"},
+    ]
+    steps.sort(key=lambda s: -s["minutes_ago"])
+    return steps
