@@ -44,7 +44,7 @@ def load_dataset(data_dir=None):
         data_dir = Path(__file__).parent / "data"
 
     X, y = [], []
-    for folder_name, label in [("boat", 1), ("background", 0)]:
+    for folder_name, label in [("boat", 0), ("gunshot", 1), ("seal", 2), ("anomaly", 3), ("background", 4)]:
         folder_path = Path(data_dir) / folder_name
         if not folder_path.exists():
             print(f"Папка не найдена: {folder_path}")
@@ -63,5 +63,8 @@ def load_dataset(data_dir=None):
 if __name__ == "__main__":
     X, y = load_dataset()
     print(f"Датасет: {X.shape[0]} образцов, {X.shape[1]} признаков")
-    print(f"Boat: {y.sum()}, Background: {len(y) - y.sum()}")
+    from collections import Counter
+    labels = ["boat", "gunshot", "seal", "anomaly", "background"]
+    counts = Counter(y)
+    print("Распределение:", {labels[k]: counts.get(k, 0) for k in range(5)})
     print(f"Пример признаков: {X[0][:5]}")

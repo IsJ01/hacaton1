@@ -1,12 +1,13 @@
-"""Инференс: классификация аудио-файла.
+"""Инференс: multiclass классификация (boat, gunshot, seal, anomaly, background).
 
-Возвращает ClassificationResult в формате API-контракта:
-{
-  "label": "seal" | "boat" | "gunshot" | "anomaly",
-  "confidence": 0.94,
-  "candidates": [...]
-}
+Логика anomaly:
+- Модель предсказывает 5 классов.
+- Если top-1 confidence < ANOMALY_THRESHOLD → "anomaly".
+- Иначе — top-1 класс.
+
+Возвращает ClassificationResult в формате API-контракта.
 """
+import io
 import joblib
 import librosa
 import soundfile as sf
@@ -18,6 +19,11 @@ MODEL_PATH = Path(__file__).parent / "models" / "classifier.pkl"
 SR = 22050
 N_MFCC = 13
 
+# Порог: ниже этого confidence → аномалия
+ANOMALY_THRESHOLD = 0.6
+
+LABELS = ["boat", "gunshot", "seal", "anomaly", "background"]
+
 model = joblib.load(str(MODEL_PATH))
 
 
@@ -27,64 +33,56 @@ def underwater_filter(audio, sr):
     return filtfilt(b, a, audio)
 
 
-def classify_audio(wav_path, return_candidates=True):
-    """Классифицирует аудио-файл.
-
-    Returns dict в формате ClassificationResult.
-    """
-    audio, orig_sr = sf.read(str(wav_path))
+def _extract_features(audio, orig_sr):
     if audio.ndim > 1:
         audio = audio.mean(axis=1)
     if orig_sr != SR:
         audio = librosa.resample(audio, orig_sr=orig_sr, target_sr=SR)
-
     audio = underwater_filter(audio, SR)
     mfcc = librosa.feature.mfcc(y=audio, sr=SR, n_mfcc=N_MFCC)
-    features = mfcc.mean(axis=1).reshape(1, -1)
+    return mfcc.mean(axis=1).reshape(1, -1)
 
+
+def _predict(features):
     proba = model.predict_proba(features)[0]
-    # proba[0] = background, proba[1] = boat
+    top_idx = int(np.argmax(proba))
+    top_conf = float(proba[top_idx])
+    top_label = LABELS[top_idx]
 
-    if proba[1] > proba[0]:
-        label = "boat"
-        confidence = float(proba[1])
-    else:
-        label = "background"
-        confidence = float(proba[0])
+    # Anomaly fallback: если модель не уверена — это аномалия
+    if top_conf < ANOMALY_THRESHOLD:
+        return "anomaly", top_conf, proba
 
-    result = {
-        "label": label,
-        "confidence": confidence,
-    }
+    return top_label, top_conf, proba
 
+
+def classify_audio(wav_path, return_candidates=True):
+    """Классифицирует аудио-файл."""
+    audio, orig_sr = sf.read(str(wav_path))
+    features = _extract_features(audio, orig_sr)
+    label, confidence, proba = _predict(features)
+
+    result = {"label": label, "confidence": confidence}
     if return_candidates:
         result["candidates"] = [
-            {"label": "boat", "confidence": float(proba[1])},
-            {"label": "background", "confidence": float(proba[0])}
+            {"label": LABELS[i], "confidence": float(proba[i])}
+            for i in range(len(LABELS))
         ]
-
     return result
 
 
 def classify_bytes(audio_bytes, sr=SR):
     """Классифицирует аудио из байтов (для API)."""
-    import io
     audio, orig_sr = sf.read(io.BytesIO(audio_bytes))
-    if audio.ndim > 1:
-        audio = audio.mean(axis=1)
-    if orig_sr != sr:
-        audio = librosa.resample(audio, orig_sr=orig_sr, target_sr=sr)
-    audio = underwater_filter(audio, sr)
-    mfcc = librosa.feature.mfcc(y=audio, sr=sr, n_mfcc=N_MFCC)
-    features = mfcc.mean(axis=1).reshape(1, -1)
-    proba = model.predict_proba(features)[0]
-    label = "boat" if proba[1] > proba[0] else "background"
+    features = _extract_features(audio, orig_sr)
+    label, confidence, proba = _predict(features)
+
     return {
         "label": label,
-        "confidence": float(max(proba)),
+        "confidence": confidence,
         "candidates": [
-            {"label": "boat", "confidence": float(proba[1])},
-            {"label": "background", "confidence": float(proba[0])}
+            {"label": LABELS[i], "confidence": float(proba[i])}
+            for i in range(len(LABELS))
         ]
     }
 

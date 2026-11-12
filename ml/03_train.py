@@ -24,7 +24,8 @@ load_dataset = _preprocess.load_dataset
 # --- Загрузка ---
 X, y = load_dataset()
 print(f"Данные: {X.shape[0]} образцов, {X.shape[1]} признаков")
-print(f"Boat: {y.sum()}, Background: {len(y) - y.sum()}")
+from collections import Counter
+print(f"Распределение: {Counter(y)}")
 
 # --- Train/test split ---
 X_train, X_test, y_train, y_test = train_test_split(
@@ -40,8 +41,8 @@ print(f"  Accuracy: {accuracy_score(y_test, y_pred_base):.3f}")
 
 # --- Gradient Boosting (sklearn, no external deps) ---
 model = GradientBoostingClassifier(
-    n_estimators=100,
-    max_depth=4,
+    n_estimators=150,
+    max_depth=5,
     learning_rate=0.1,
     subsample=0.8,
     random_state=42
@@ -51,12 +52,12 @@ model.fit(X_train, y_train)
 y_pred = model.predict(X_test)
 y_prob = model.predict_proba(X_test)[:, 1]
 
-# --- Метрики ---
+# --- Метрики (multiclass) ---
 metrics = {
     "accuracy": float(accuracy_score(y_test, y_pred)),
-    "precision": float(precision_score(y_test, y_pred, zero_division=0)),
-    "recall": float(recall_score(y_test, y_pred, zero_division=0)),
-    "f1": float(f1_score(y_test, y_pred, zero_division=0)),
+    "precision_macro": float(precision_score(y_test, y_pred, average='macro', zero_division=0)),
+    "recall_macro": float(recall_score(y_test, y_pred, average='macro', zero_division=0)),
+    "f1_macro": float(f1_score(y_test, y_pred, average='macro', zero_division=0)),
     "confusion_matrix": confusion_matrix(y_test, y_pred).tolist(),
     "n_samples": int(len(y_test)),
     "n_features": int(X.shape[1]),
@@ -64,13 +65,13 @@ metrics = {
 
 print(f"\nGradientBoosting:")
 for k, v in metrics.items():
-    if k != "confusion_matrix":
+    if k not in ("confusion_matrix", "n_samples", "n_features"):
         print(f"  {k}: {v:.3f}")
 print(f"  confusion_matrix: {metrics['confusion_matrix']}")
 
 # --- Cross-validation ---
 cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-cv_scores = cross_val_score(model, X, y, cv=cv, scoring='f1')
+cv_scores = cross_val_score(model, X, y, cv=cv, scoring='f1_macro')
 metrics["cv_f1_mean"] = float(cv_scores.mean())
 metrics["cv_f1_std"] = float(cv_scores.std())
 print(f"\nCross-validation F1: {cv_scores.mean():.3f} ± {cv_scores.std():.3f}")
