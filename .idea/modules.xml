@@ -2,7 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/.idea/mock-backend.iml" filepath="$PROJECT_DIR$/.idea/mock-backend.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/hacaton1.iml" filepath="$PROJECT_DIR$/.idea/hacaton1.iml" />
     </modules>
   </component>
 </project>
