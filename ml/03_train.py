@@ -76,6 +76,15 @@ metrics["cv_f1_mean"] = float(cv_scores.mean())
 metrics["cv_f1_std"] = float(cv_scores.std())
 print(f"\nCross-validation F1: {cv_scores.mean():.3f} ± {cv_scores.std():.3f}")
 
+# --- Anomaly fallback ---
+# Модель обучается на 4 класса (boat, gunshot, seal, background).
+# Anomaly = fallback: если confidence < threshold → anomaly.
+# Это предотвращает " boat mistaken за anomaly" — boat всегда имеет высокий confidence.
+ANOMALY_THRESHOLD = 0.6
+metrics["anomaly_threshold"] = ANOMALY_THRESHOLD
+metrics["n_classes"] = 5  # 4 + anomaly fallback
+print(f"\nAnomaly fallback: confidence < {ANOMALY_THRESHOLD} → anomaly")
+
 # --- Важность признаков ---
 feature_importance = model.feature_importances_
 feature_names = [f"mfcc_{i}" for i in range(len(feature_importance))]

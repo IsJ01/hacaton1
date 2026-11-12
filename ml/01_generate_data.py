@@ -60,26 +60,29 @@ def generate_gunshot(duration=1.0, sr=SR):
     return signal.astype(np.float32)
 
 def generate_seal_vocalization(duration=DURATION, sr=SR):
-    """Тюлений звук: высокочастотный свист/щебетание."""
+    """Тюлений звук: высокочастотные свисты (4–8 кГц).
+
+    Важно: свисты должны быть громче фона, чтобы выжить
+    после underwater filter (который гасит высокие частоты).
+    """
     n = int(sr * duration)
     t = np.linspace(0, duration, n, endpoint=False)
 
     signal = np.zeros(n)
-    # Короткие свисты (2–5 кГц) с частотной модуляцией
-    num_whistles = 8
+    # Короткие сильные свисты с частотной модуляцией
+    num_whistles = 12
     for _ in range(num_whistles):
-        start = np.random.randint(0, n - int(0.3 * sr))
-        length = int(np.random.uniform(0.1, 0.4) * sr)
-        freq = np.random.uniform(2000, 5000)
-        # Частота "кружится" вверх-вниз
+        start = np.random.randint(0, n - int(0.25 * sr))
+        length = int(np.random.uniform(0.08, 0.3) * sr)
+        freq = np.random.uniform(4000, 8000)
         tt = t[start:start + length]
-        fm = freq + 500 * np.sin(2 * np.pi * 3 * tt)
+        fm = freq + 800 * np.sin(2 * np.pi * 4 * tt)
         whistle = np.sin(2 * np.pi * fm * tt)
-        env = np.exp(-tt * 5)
-        signal[start:start + length] += whistle * env * 0.3
+        env = np.exp(-tt * 8)
+        signal[start:start + length] += whistle * env * 0.6
 
-    signal += 0.05 * pink_noise(n)
-    signal = signal / (np.max(np.abs(signal)) + 1e-8) * 0.7
+    signal += 0.03 * pink_noise(n)
+    signal = signal / (np.max(np.abs(signal)) + 1e-8) * 0.8
     return signal.astype(np.float32)
 
 def generate_anomaly(duration=DURATION, sr=SR):

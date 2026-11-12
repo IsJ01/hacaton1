@@ -44,7 +44,9 @@ def load_dataset(data_dir=None):
         data_dir = Path(__file__).parent / "data"
 
     X, y = [], []
-    for folder_name, label in [("boat", 0), ("gunshot", 1), ("seal", 2), ("anomaly", 3), ("background", 4)]:
+    # Anomaly исключён из датасета: он определяется через fallback-логику
+# (confidence < 0.6 → anomaly), а не как отдельный класс.
+for folder_name, label in [("boat", 0), ("gunshot", 1), ("seal", 2), ("background", 3)]:
         folder_path = Path(data_dir) / folder_name
         if not folder_path.exists():
             print(f"Папка не найдена: {folder_path}")
