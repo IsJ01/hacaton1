@@ -8,7 +8,7 @@
   прогноз   → модель присутствия тюленя (forecast.py)    → GET /api/v1/forecast
   телеметрия → температура воды и уровень; скачок уровня → WaterEvent (level_anomaly)
   аналитика → статус буя за сутки, соседи события, тюлени (analytics.py)
-  демо      → история за сутки и сценарий «браконьер» (demo.py)
+  демо      → история за сутки при DEMO_SEED=1 (demo.py); обычно данные шлёт эмулятор буя
 
 Хранилище — SQLite (storage.py), настройки — config.py, буи — buoys.json.
 """
@@ -576,23 +576,6 @@ def get_seals(hours: float = Query(SEAL_WINDOW_H, ge=1, le=168)):
 
 
 # ---------- Демо и описание моделей (сверх контракта v2) ----------
-class ScenarioOut(BaseModel):
-    started: bool
-    duration_sec: int
-    message: str
-
-
-@app.post("/api/v1/demo/scenario", response_model=ScenarioOut, tags=["demo"],
-          summary="Сценарий «браконьер»: лодка → второй буй → выстрел → сброс")
-def demo_scenario():
-    started = demo.run_scenario(
-        BUOYS, library_file, process_sound,
-        lambda buoy_id, value: post_salinity(SalinityIn(buoy_id=buoy_id, salinity=value)),
-        new_id, now_iso)
-    return {"started": started, "duration_sec": demo.duration_sec(),
-            "message": "Сценарий запущен" if started else "Сценарий уже идёт"}
-
-
 def _read_json(path: Path) -> Optional[dict]:
     try:
         return json.loads(path.read_text(encoding="utf-8"))

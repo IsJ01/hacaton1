@@ -867,7 +867,7 @@
     btn.disabled = true;
     try {
       const r = await Api.runScenario();
-      toast('info', r.started ? 'Сценарий запущен' : 'Сценарий уже идёт', 'Около ' + r.duration_sec + ' с: лодка → второй буй → выстрел → сброс');
+      toast('info', r.started ? 'Сценарий запущен' : 'Сценарий уже идёт', 'Эмулятор буя шлёт данные на бэкенд, около ' + r.duration_sec + ' с: лодка → второй буй → выстрел → сброс → спутник');
       fastUntil = Date.now() + (r.duration_sec + 8) * 1000;
       showTab('map');
       setTimeout(() => (btn.disabled = false), (r.duration_sec + 2) * 1000);

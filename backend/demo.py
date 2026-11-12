@@ -1,12 +1,10 @@
-"""Демо-данные: история за сутки при пустой базе и сценарий «браконьер» по кнопке.
+"""Запасные демо-данные: история за сутки при пустой базе (DEMO_SEED=1), если эмулятор буя не запущен.
 
 Звук всегда проходит через настоящую модель (process_sound из main.py), поэтому
 на дашборде видно ровно то, что модель ответила на файл из ml/data.
 """
 import math
 import random
-import threading
-import time
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 
@@ -23,18 +21,6 @@ HISTORY_SOUNDS = [(m, b, f"seal_{i:03d}.wav") for i, (m, b) in enumerate(SEAL_TR
     (600, "b-003", "boat_002.wav"), (594, "b-003", "gunshot_000.wav"),
     (760, "b-001", "anomaly_000.wav"), (330, "b-004", "anomaly_001.wav"),
 ]
-
-# сценарий «браконьер»: (пауза перед шагом в секундах, тип, буй, файл или солёность)
-SCENARIO = [
-    (0, "sound", "b-001", "boat_004.wav"),     # лодка входит в зону слышимости
-    (6, "sound", "b-002", "boat_005.wav"),     # её слышит соседний буй — подтверждение
-    (6, "sound", "b-002", "gunshot_001.wav"),  # выстрел
-    (5, "sound", "b-003", "gunshot_002.wav"),  # выстрел слышит второй буй
-    (6, "salinity", "b-003", 9.6),             # сброс: солёность ниже нормы
-]
-
-_running = threading.Lock()
-
 
 def _iso(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -69,30 +55,3 @@ def seed_if_empty(buoys: dict, library_file: Callable, process_sound: Callable, 
             level = level_norm + 0.05 * math.sin(i / 4 + bi) + rnd.uniform(-0.01, 0.01)
             storage.add_telemetry(f"tel-demo-{bi}-{i:02d}", buoy_id, ts, round(temp, 1), round(level, 2))
     return created
-
-
-def run_scenario(buoys: dict, library_file: Callable, process_sound: Callable, add_salinity: Callable,
-                 new_id: Callable, now_iso: Callable) -> bool:
-    """Запускает сценарий в фоне. False — если он уже идёт."""
-    if not _running.acquire(blocking=False):
-        return False
-
-    def worker():
-        try:
-            for pause, kind, buoy_id, arg in SCENARIO:
-                time.sleep(pause)
-                if buoy_id not in buoys:
-                    continue
-                if kind == "sound":
-                    process_sound(_read(library_file, arg), new_id("evt"), buoy_id, "buoy", now_iso())
-                else:
-                    add_salinity(buoy_id, arg)
-        finally:
-            _running.release()
-
-    threading.Thread(target=worker, daemon=True).start()
-    return True
-
-
-def duration_sec() -> int:
-    return sum(step[0] for step in SCENARIO)

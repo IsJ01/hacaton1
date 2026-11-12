@@ -8,6 +8,8 @@ window.CONFIG = {
   // Адрес бэкенда (контракт v2). hostname берётся из адресной строки,
   // чтобы с телефона в той же сети работало без правок.
   API_BASE: 'http://' + (location.hostname || 'localhost') + ':8001',
+  // Эмулятор буя (mock-backend/emulator.py): кнопка «Сценарий» просит его отправить данные на бэкенд
+  EMULATOR_URL: 'http://' + (location.hostname || 'localhost') + ':8000',
 
   // ---------- ОБНОВЛЕНИЕ ----------
   POLL_INTERVAL_MS: 5000, // как часто перезапрашивать данные

@@ -5,6 +5,10 @@
   POST /send/sound     — выбрать буй и звуковой файл (по имени или номеру) → POST {BACKEND}/api/v1/events
   POST /send/salinity  — буй + уровень солёности → POST {BACKEND}/api/v1/salinity
   POST /send/satellite — снимок из sat_library/ + координаты → POST {BACKEND}/api/v1/satellite
+  POST /send/telemetry — температура воды и уровень → POST {BACKEND}/api/v1/telemetry
+  POST /scenario/history — заготовленные сутки работы пяти буёв (scenarios.py) → на бэкенд
+  POST /scenario/poacher — живой сценарий «браконьер» по шагам; ход — GET /scenario/status
+  POST /check          — проверка, что бэкенд принимает и сохраняет данные буя
   GET  /sounds, /images — что лежит в папках (с порядковыми номерами)
   GET  /buoys          — буи с бэкенда
   GET  /health, /log   — доступен ли бэкенд, журнал отправок
@@ -12,12 +16,13 @@
 Звуки: положи свои файлы в папку sounds/ (wav, mp3, ogg, flac, m4a) — они сразу появятся в GET /sounds.
 Адрес бэкенда: переменная окружения BACKEND_URL (по умолчанию http://localhost:8001).
 """
+import asyncio
 import base64
 import os
 import random
-from collections import deque
+from collections import Counter, deque
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -25,6 +30,8 @@ import httpx
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
+
+import scenarios
 
 BASE = Path(__file__).parent
 SOUNDS = BASE / "sounds"
@@ -69,8 +76,8 @@ def pick(files: list[Path], name: Optional[str], index: Optional[int], what: str
     return random.choice(files), None
 
 
-async def send(kind: str, path: str, sent: dict, **kwargs) -> JSONResponse:
-    """POST на бэкенд; в ответе — что отправили и что ответил бэкенд."""
+async def post(kind: str, path: str, sent: dict, quiet: bool = False, **kwargs) -> tuple[Optional[int], object]:
+    """POST на бэкенд и запись в журнал. Возвращает (код ответа или None, тело)."""
     url = BACKEND_URL + path
     entry = {"time": now_iso(), "kind": kind, "to": url, "sent": sent}
     LOG.appendleft(entry)
@@ -79,17 +86,27 @@ async def send(kind: str, path: str, sent: dict, **kwargs) -> JSONResponse:
     except httpx.HTTPError as e:
         entry.update(backend_status=None, backend_response=f"недоступен: {type(e).__name__}")
         print(f"[{kind}] {sent} → бэкенд {BACKEND_URL} недоступен ({type(e).__name__})")
-        return error(502, "backend_unavailable", f"Cannot reach backend at {BACKEND_URL}", to=url, sent=sent)
+        return None, f"недоступен: {type(e).__name__}"
     try:
         body = r.json()
     except ValueError:
         body = r.text[:500]
     entry.update(backend_status=r.status_code, backend_response=body)
-    print(f"[{kind}] {sent} → {r.status_code}")
-    result = {"to": url, "sent": sent, "backend_status": r.status_code, "backend_response": body}
-    if r.status_code >= 400:
+    if not quiet:
+        print(f"[{kind}] {sent} → {r.status_code}")
+    return r.status_code, body
+
+
+async def send(kind: str, path: str, sent: dict, **kwargs) -> JSONResponse:
+    """POST на бэкенд; в ответе — что отправили и что ответил бэкенд."""
+    url = BACKEND_URL + path
+    status, body = await post(kind, path, sent, **kwargs)
+    if status is None:
+        return error(502, "backend_unavailable", f"Cannot reach backend at {BACKEND_URL}", to=url, sent=sent)
+    result = {"to": url, "sent": sent, "backend_status": status, "backend_response": body}
+    if status >= 400:
         return JSONResponse(status_code=502, content={
-            "error": "backend_error", "message": f"Backend answered {r.status_code}", **result})
+            "error": "backend_error", "message": f"Backend answered {status}", **result})
     return JSONResponse(status_code=200, content=result)
 
 
@@ -185,6 +202,187 @@ async def send_satellite(
     return await send("satellite", "/api/v1/satellite", sent,
                       data={"geo[lat]": str(lat), "geo[lon]": str(lon), "timestamp": ts},
                       files={"file": (f.name, raw, mime)})
+
+
+# ---------- Телеметрия ----------
+@app.post("/send/telemetry", tags=["телеметрия"], summary="Буй отправляет температуру воды и уровень → POST /api/v1/telemetry")
+async def send_telemetry(
+    buoy_id: str = Query(_BUOYS[0], description="От какого буя", json_schema_extra=dropdown(_BUOYS)),
+    water_temp_c: Optional[float] = Query(11.4, description="Температура воды, °C"),
+    level_m: Optional[float] = Query(-28.9, description="Уровень, м (Балтийская система); отклонение ≥0.3 м → аномалия"),
+    timestamp: Optional[str] = Query(None, description="ISO-8601; пусто = сейчас"),
+):
+    payload = {"buoy_id": buoy_id, "water_temp_c": water_temp_c, "level_m": level_m, "timestamp": timestamp or now_iso()}
+    return await send("telemetry", "/api/v1/telemetry", payload, json=payload)
+
+
+# ---------- Сценарии: заготовленные данные буёв (scenarios.py) ----------
+def build(step: dict, ts: str) -> tuple[str, str, dict, dict]:
+    """Шаг сценария → (тип, путь на бэкенде, что записать в журнал, аргументы запроса) — те же, что у /send/*."""
+    kind = step["kind"]
+    if kind == "sound":
+        f = SOUNDS / step["file"]
+        raw = f.read_bytes()
+        payload = {"buoy_id": step["buoy_id"], "timestamp": ts,
+                   "audio": {"format": "wav", "data_base64": base64.b64encode(raw).decode()}}
+        return kind, "/api/v1/events", {"buoy_id": step["buoy_id"], "timestamp": ts, "file_name": f.name}, {"json": payload}
+    if kind == "salinity":
+        payload = {"buoy_id": step["buoy_id"], "salinity": step["salinity"], "timestamp": ts}
+        return kind, "/api/v1/salinity", payload, {"json": payload}
+    if kind == "telemetry":
+        payload = {"buoy_id": step["buoy_id"], "water_temp_c": step["water_temp_c"], "level_m": step["level_m"], "timestamp": ts}
+        return kind, "/api/v1/telemetry", payload, {"json": payload}
+    f = IMAGES / step["file"]
+    sent = {"file_name": f.name, "geo": {"lat": step["lat"], "lon": step["lon"]}, "timestamp": ts}
+    return kind, "/api/v1/satellite", sent, {
+        "data": {"geo[lat]": str(step["lat"]), "geo[lon]": str(step["lon"]), "timestamp": ts},
+        "files": {"file": (f.name, f.read_bytes(), "image/jpeg")}}
+
+
+def expected_label(file_name: str) -> str:
+    prefix = file_name.split("_")[0]
+    return "anomaly" if prefix == "bg" else prefix  # фон бэкенд отдаёт как anomaly
+
+
+def summarize(results: list[tuple[dict, Optional[int], object]]) -> dict:
+    """Что принял бэкенд и что он из этого понял."""
+    by_kind: dict[str, Counter] = {}
+    labels, mismatches, created, errors = Counter(), [], Counter(), []
+    for step, status, body in results:
+        c = by_kind.setdefault(step["kind"], Counter())
+        c["sent"] += 1
+        if status is not None and status < 400:
+            c["accepted"] += 1
+        else:
+            c["failed"] += 1
+            if len(errors) < 5:
+                errors.append({"step": {k: v for k, v in step.items() if k != "note"}, "status": status, "response": body})
+            continue
+        if step["kind"] == "sound" and isinstance(body, dict):
+            got = body.get("event", {}).get("classification", {}).get("label")
+            labels[got] += 1
+            if got != expected_label(step["file"]):
+                mismatches.append({"file": step["file"], "expected": expected_label(step["file"]), "model": got})
+        elif isinstance(body, dict) and body.get("event"):
+            created[body["event"]["type"]] += 1
+    return {"by_kind": {k: dict(v) for k, v in by_kind.items()}, "sound_labels_from_model": dict(labels),
+            "model_mismatches": mismatches, "water_events_created": dict(created), "errors": errors}
+
+
+@app.post("/scenario/history", tags=["сценарии"],
+          summary="Заготовленные сутки работы буёв → на бэкенд (звук, солёность, телеметрия, снимки)")
+async def scenario_history(hours: int = Query(24, ge=1, le=24, description="За сколько последних часов")):
+    """Отправляет на бэкенд сутки данных с прошлыми метками времени — обычными запросами по контракту.
+    Повторный запуск добавит данные ещё раз; начать с чистого листа — `bash docker.sh reset` в backend/."""
+    steps = scenarios.history_steps(hours)
+    now = datetime.now(timezone.utc)
+    sem = asyncio.Semaphore(8)
+
+    async def one(step):
+        ts = (now - timedelta(minutes=step["minutes_ago"])).strftime("%Y-%m-%dT%H:%M:%SZ")
+        kind, path, sent, kwargs = build(step, ts)
+        async with sem:
+            status, body = await post(kind, path, sent, quiet=True, **kwargs)
+        return step, status, body
+
+    results = await asyncio.gather(*(one(s) for s in steps))
+    report = summarize(results)
+    ok = all(v.get("failed", 0) == 0 for v in report["by_kind"].values())
+    print(f"[history] отправлено {len(steps)} → " + ", ".join(f"{k}: {v}" for k, v in report["by_kind"].items()))
+    return JSONResponse(status_code=200 if ok else 502, content={"backend_url": BACKEND_URL, "hours": hours,
+                                                                 "all_accepted": ok, **report})
+
+
+SCENARIO = {"running": False, "started_at": None, "steps": []}
+
+
+@app.post("/scenario/poacher", tags=["сценарии"], summary="Живой сценарий «браконьер»: шаги с паузами, ~30 с")
+async def scenario_poacher():
+    duration = sum(s["pause"] for s in scenarios.POACHER)
+    if SCENARIO["running"]:
+        return {"started": False, "duration_sec": duration, "message": "Сценарий уже идёт", **SCENARIO}
+    SCENARIO.update(running=True, started_at=now_iso(), steps=[])
+
+    async def run():
+        results = []
+        try:
+            for step in scenarios.POACHER:
+                await asyncio.sleep(step["pause"])
+                kind, path, sent, kwargs = build(step, now_iso())
+                status, body = await post(kind, path, sent, **kwargs)
+                results.append((step, status, body))
+                SCENARIO["steps"].append({"time": now_iso(), "note": step["note"], "backend_status": status})
+            SCENARIO["report"] = summarize(results)
+        finally:
+            SCENARIO["running"] = False
+
+    asyncio.create_task(run())
+    return {"started": True, "duration_sec": duration, "message": "Сценарий запущен",
+            "plan": [s["note"] for s in scenarios.POACHER]}
+
+
+@app.get("/scenario/status", tags=["сценарии"], summary="Ход живого сценария")
+def scenario_status():
+    return SCENARIO
+
+
+# ---------- Проверка бэкенда ----------
+@app.post("/check", tags=["служебное"], summary="Проверить, что бэкенд принимает и сохраняет данные буя")
+async def check(buoy_id: str = Query(_BUOYS[1] if len(_BUOYS) > 1 else _BUOYS[0], json_schema_extra=dropdown(_BUOYS))):
+    """Отправляет по одному звуку, солёности и телеметрии, затем читает их обратно через GET бэкенда."""
+    http, checks = app.state.http, []
+
+    def add(name, ok, detail):
+        checks.append({"check": name, "ok": bool(ok), "detail": detail})
+
+    async def get(path):
+        try:
+            r = await http.get(BACKEND_URL + path, timeout=10)
+            return r.status_code, r.json()
+        except (httpx.HTTPError, ValueError) as e:
+            return None, str(e)
+
+    status, body = await get("/api/v1/buoys")
+    add("бэкенд отвечает, знает буй", status == 200 and any(b["buoy_id"] == buoy_id for b in body.get("buoys", [])),
+        f"GET /api/v1/buoys → {status}")
+    if status != 200:
+        return JSONResponse(status_code=502, content={"backend_url": BACKEND_URL, "ok": False, "checks": checks})
+
+    ts = now_iso()
+    kind, path, sent, kwargs = build({"kind": "sound", "buoy_id": buoy_id, "file": "seal_001.wav"}, ts)
+    status, body = await post(kind, path, sent, **kwargs)
+    event_id = body.get("event_id") if isinstance(body, dict) else None
+    label = body.get("event", {}).get("classification", {}).get("label") if isinstance(body, dict) else None
+    add("звук принят и классифицирован", status == 201 and event_id, f"POST /api/v1/events → {status}, модель: {label}")
+    if event_id:
+        s2, ev = await get(f"/api/v1/events/{event_id}")
+        add("звук сохранён", s2 == 200 and ev.get("buoy_id") == buoy_id, f"GET /api/v1/events/{event_id} → {s2}")
+        s3, _ = await get(f"/api/v1/events/{event_id}/neighbors")
+        add("анализ соседей работает", s3 == 200, f"GET /api/v1/events/{event_id}/neighbors → {s3}")
+        try:
+            a = await http.get(BACKEND_URL + f"/audio/{event_id}.wav", timeout=10)
+            add("запись доступна для прослушивания", a.status_code == 200 and a.content[:4] == b"RIFF", f"GET /audio/{event_id}.wav → {a.status_code}")
+        except httpx.HTTPError as e:
+            add("запись доступна для прослушивания", False, str(e))
+
+    kind, path, sent, kwargs = build({"kind": "salinity", "buoy_id": buoy_id, "salinity": 12.5}, ts)
+    status, body = await post(kind, path, sent, **kwargs)
+    mid = body.get("measurement_id") if isinstance(body, dict) else None
+    add("солёность принята", status == 201 and mid, f"POST /api/v1/salinity → {status}")
+    s2, sal = await get(f"/api/v1/salinity?buoy_id={buoy_id}&limit=5")
+    add("солёность сохранена", s2 == 200 and any(m["measurement_id"] == mid for m in sal.get("measurements", [])),
+        f"GET /api/v1/salinity → {s2}")
+
+    kind, path, sent, kwargs = build({"kind": "telemetry", "buoy_id": buoy_id, "water_temp_c": 11.4, "level_m": -28.9}, ts)
+    status, body = await post(kind, path, sent, **kwargs)
+    add("телеметрия принята", status == 201, f"POST /api/v1/telemetry → {status}")
+
+    s2, st = await get("/api/v1/buoy-status")
+    me = next((b for b in st.get("buoys", []) if b["buoy_id"] == buoy_id), {}) if s2 == 200 else {}
+    add("статус буя обновился", me.get("online") and me.get("water_temp_c") is not None,
+        f"GET /api/v1/buoy-status → {s2}, статус: {me.get('status')}, на связи: {me.get('online')}")
+    ok = all(c["ok"] for c in checks)
+    return JSONResponse(status_code=200 if ok else 502, content={"backend_url": BACKEND_URL, "ok": ok, "checks": checks})
 
 
 # ---------- Служебное ----------

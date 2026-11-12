@@ -40,8 +40,11 @@
     getSeals: (params) => request('/api/v1/seals' + query(params)),
     // GET /api/v1/model-info → { sound, forecast, library_size } (сверх контракта)
     getModelInfo: () => request('/api/v1/model-info'),
-    // POST /api/v1/demo/scenario → { started, duration_sec, message } (сверх контракта)
-    runScenario: () => request('/api/v1/demo/scenario', { method: 'POST' }),
+    // Эмулятор буя: POST {EMULATOR_URL}/scenario/poacher → он сам шлёт события на бэкенд, как настоящие буи
+    runScenario: () =>
+      fetch(C.EMULATOR_URL + '/scenario/poacher', { method: 'POST' })
+        .catch(() => { throw new Error('эмулятор буя не отвечает (' + C.EMULATOR_URL + '): cd mock-backend && bash docker.sh'); })
+        .then((r) => r.json()),
     // POST /api/v1/classify/upload — multipart: file, buoy_id?
     classifyUpload: (file, buoyId) => {
       const form = new FormData();

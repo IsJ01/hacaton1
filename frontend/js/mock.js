@@ -186,7 +186,7 @@
       forecast: { data: 'synthetic', samples: 30000, roc_auc: 0.749, brier: 0.157, accuracy: 0.774 },
       library_size: 150,
     }),
-    // Сценарий в заглушках: те же шаги, что в backend/demo.py
+    // Сценарий в заглушках: те же шаги, что в mock-backend/scenarios.py
     runScenario: () => {
       const steps = [[0, 'b-001', 'boat', 0.86], [6, 'b-002', 'boat', 0.81], [12, 'b-002', 'gunshot', 0.93], [17, 'b-003', 'gunshot', 0.88]];
       steps.forEach(([sec, buoy_id, label, conf]) => setTimeout(() => {

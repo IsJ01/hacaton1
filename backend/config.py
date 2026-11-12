@@ -51,4 +51,4 @@ SEAL_WINDOW_H = float(os.getenv("SEAL_WINDOW_H", "24"))             # окно �
 SEAL_TRACK_BINS = int(os.getenv("SEAL_TRACK_BINS", "4"))            # на сколько отрезков делим окно для трека дрейфа
 
 # --- демо ---
-DEMO_SEED = os.getenv("DEMO_SEED", "1") == "1"  # пустая база при старте → история за сутки (0 — стартовать пустым)
+DEMO_SEED = os.getenv("DEMO_SEED", "0") == "1"  # 1 — при пустой базе создать историю самому (запасной вариант без эмулятора)
