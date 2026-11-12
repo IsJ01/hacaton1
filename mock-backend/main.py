@@ -35,7 +35,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from audio_gen import generate_library
 
 BASE = Path(__file__).parent
-LIBRARY = BASE / "library"
+LIBRARY = BASE / "sounds"  # общая папка со звуками (её же использует emulator.py)
 AUDIO = BASE / "data" / "audio"
 
 SEED_EVENTS = int(os.getenv("SEED_EVENTS", "20"))
@@ -235,7 +235,8 @@ async def auto_emitter():
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    generate_library(LIBRARY)
+    if not library_files():  # пустая папка — создаём синтетические примеры
+        generate_library(LIBRARY)
     shutil.rmtree(AUDIO, ignore_errors=True)
     AUDIO.mkdir(parents=True, exist_ok=True)
     shutil.rmtree(IMAGES, ignore_errors=True)

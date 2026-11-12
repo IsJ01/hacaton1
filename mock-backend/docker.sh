@@ -1,55 +1,50 @@
 #!/usr/bin/env bash
-# Запуск в обычном Docker, без плагина compose.
-#   bash docker.sh         — собрать образ и запустить бэкенд (в фоне) на http://localhost:8000
-#   bash docker.sh emu     — то же + эмулятор буёв в этом терминале (Ctrl+C останавливает эмулятор)
-#   bash docker.sh logs    — логи бэкенда
-#   bash docker.sh stop    — остановить и удалить контейнеры
-# Настройки: PORT=8000 SEED_EVENTS=20 AUTO_EMIT_SEC=0 SALINITY_NORM=12.5 SALINITY_THRESHOLD=2.0
-#   пример: AUTO_EMIT_SEC=5 bash docker.sh
+# Запуск в обычном Docker (плагин compose не нужен). Контейнеры работают в сети хоста,
+# поэтому эмулятор видит бэкенд на localhost:8001 так же, как без Docker.
+#   bash docker.sh          — эмулятор буя: Swagger http://localhost:8000/docs, шлёт на BACKEND_URL
+#   bash docker.sh mock     — мок основного бэкенда на :8001 (для проверки, пока нет настоящего)
+#   bash docker.sh logs     — логи эмулятора   (bash docker.sh logs mock — логи мока)
+#   bash docker.sh stop     — остановить всё
+# Настройки: BACKEND_URL=http://localhost:8001  PORT=8000  MOCK_PORT=8001
+#   пример: BACKEND_URL=http://192.168.1.50:8001 bash docker.sh
 set -e
 cd "$(dirname "$0")"
 
-IMAGE=eco-mock
-NAME=eco-mock-backend
-NET=eco-mock-net
+IMAGE=eco-buoy-emulator
+EMU=eco-buoy-emulator
+MOCK=eco-mock-backend
 PORT="${PORT:-8000}"
-
-stop() {
-  docker rm -f "$NAME" "$NAME-emu" >/dev/null 2>&1 || true
-}
-
-start_backend() {
-  docker build -t "$IMAGE" .
-  stop
-  docker network inspect "$NET" >/dev/null 2>&1 || docker network create "$NET" >/dev/null
-  docker run -d --name "$NAME" --network "$NET" -p "$PORT:8000" \
-    -e SEED_EVENTS="${SEED_EVENTS:-20}" \
-    -e AUTO_EMIT_SEC="${AUTO_EMIT_SEC:-0}" \
-    -e SALINITY_NORM="${SALINITY_NORM:-12.5}" \
-    -e SALINITY_THRESHOLD="${SALINITY_THRESHOLD:-2.0}" \
-    "$IMAGE" >/dev/null
-  echo "Бэкенд запущен: http://localhost:$PORT/docs   (остановить: bash docker.sh stop)"
-}
+MOCK_PORT="${MOCK_PORT:-8001}"
+BACKEND_URL="${BACKEND_URL:-http://localhost:8001}"
 
 case "${1:-up}" in
   up)
-    start_backend
+    docker build -t "$IMAGE" .
+    docker rm -f "$EMU" >/dev/null 2>&1 || true
+    # sounds/ и sat_library/ подключены папками: новые файлы видны без пересборки
+    docker run -d --name "$EMU" --network host \
+      -e BACKEND_URL="$BACKEND_URL" \
+      -v "$PWD/sounds:/app/sounds" -v "$PWD/sat_library:/app/sat_library" \
+      "$IMAGE" uvicorn emulator:app --host 0.0.0.0 --port "$PORT" >/dev/null
+    echo "Эмулятор буя: http://localhost:$PORT/docs  →  шлёт на $BACKEND_URL"
     ;;
-  emu)
-    start_backend
-    echo "Эмулятор буёв (Ctrl+C — остановить эмулятор, бэкенд продолжит работать):"
-    docker run --rm -it --name "$NAME-emu" --network "$NET" "$IMAGE" \
-      python buoy_emulator.py --url "http://$NAME:8000" --audio --interval 3
+  mock)
+    docker build -t "$IMAGE" .
+    docker rm -f "$MOCK" >/dev/null 2>&1 || true
+    docker run -d --name "$MOCK" --network host \
+      -e SEED_EVENTS="${SEED_EVENTS:-20}" \
+      "$IMAGE" uvicorn main:app --host 0.0.0.0 --port "$MOCK_PORT" >/dev/null
+    echo "Мок бэкенда: http://localhost:$MOCK_PORT/docs"
     ;;
   logs)
-    docker logs -f "$NAME"
+    if [ "$2" = "mock" ]; then docker logs -f "$MOCK"; else docker logs -f "$EMU"; fi
     ;;
   stop)
-    stop
-    docker network rm "$NET" >/dev/null 2>&1 || true
+    docker rm -f "$EMU" "$MOCK" eco-mock-backend-emu eco-mock-backend-gateway >/dev/null 2>&1 || true
+    docker network rm eco-mock-net >/dev/null 2>&1 || true
     echo "Остановлено."
     ;;
   *)
-    echo "Использование: bash docker.sh [up|emu|logs|stop]"; exit 1
+    echo "Использование: bash docker.sh [up|mock|logs|stop]"; exit 1
     ;;
 esac

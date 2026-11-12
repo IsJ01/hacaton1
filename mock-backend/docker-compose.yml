@@ -1,19 +1,19 @@
-# Только бэкенд:            docker compose up --build
-# Бэкенд + эмулятор буёв:   docker compose --profile emu up --build
+# Нужен плагин compose (sudo apt install docker-compose-v2). Без него — bash docker.sh
+#   docker compose up --build                   # эмулятор буя на :8000 → бэкенд localhost:8001
+#   docker compose --profile mock up --build    # + мок бэкенда на :8001
 services:
-  backend:
-    build: .
-    ports:
-      - "8000:8000"
-    environment:
-      SEED_EVENTS: "20"        # история при старте (0 = пустой старт)
-      AUTO_EMIT_SEC: "0"       # >0 — сервер сам генерирует события каждые N сек
-      SALINITY_NORM: "12.5"
-      SALINITY_THRESHOLD: "2.0"
-
   emulator:
     build: .
-    profiles: ["emu"]
-    depends_on:
-      - backend
-    command: ["python", "buoy_emulator.py", "--url", "http://backend:8000", "--audio", "--interval", "3"]
+    network_mode: host
+    environment:
+      BACKEND_URL: "http://localhost:8001"
+    volumes:
+      - ./sounds:/app/sounds
+      - ./sat_library:/app/sat_library
+    command: ["uvicorn", "emulator:app", "--host", "0.0.0.0", "--port", "8000"]
+
+  mock-backend:
+    build: .
+    profiles: ["mock"]
+    network_mode: host
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001"]

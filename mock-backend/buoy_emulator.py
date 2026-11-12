@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Эмулятор буёв и спутника: шлёт данные на бэкенд (мок или настоящий) по контракту v2.
+"""Автоматический поток (для живой демки; ручная отправка — emulator.py и его Swagger).
+Эмулятор буёв и спутника: шлёт данные на бэкенд (мок или настоящий) по контракту v2.
 
 Каждый тик (--interval секунд):
   * звук   → POST /api/v1/events    (случайный буй)
@@ -8,7 +9,7 @@
 
   python3 buoy_emulator.py                           # всё сразу, тик 5 с
   python3 buoy_emulator.py --audio --interval 2      # звук с реальным wav в base64
-  python3 buoy_emulator.py --url http://host:8000 --count 20
+  python3 buoy_emulator.py --url http://host:8001 --count 20
   python3 buoy_emulator.py --no-sound --no-satellite # только солёность
   python3 buoy_emulator.py --discharge-now           # сразу начать со сброса (для демо)
 """
@@ -52,10 +53,10 @@ def safe(fn):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--url", default="http://localhost:8000")
+    p.add_argument("--url", default="http://localhost:8001")
     p.add_argument("--interval", type=float, default=5.0, help="пауза между тиками, сек")
     p.add_argument("--count", type=int, default=0, help="сколько тиков (0 = бесконечно)")
-    p.add_argument("--audio", action="store_true", help="прикладывать wav из ./library в base64")
+    p.add_argument("--audio", action="store_true", help="прикладывать wav из ./sounds в base64")
     p.add_argument("--salinity-norm", type=float, default=12.5, help="нормальная солёность, ‰")
     p.add_argument("--discharge-chance", type=float, default=0.05, help="вероятность начать сброс на тике")
     p.add_argument("--discharge-now", action="store_true", help="начать сброс на первом же тике")
@@ -70,11 +71,11 @@ def main():
         buoys = safe(lambda: call(f"{a.url}/api/v1/buoys")["buoys"])
         if buoys is None:
             time.sleep(2)
-    wavs = sorted((HERE / "library").glob("*.wav"))
+    wavs = sorted((HERE / "sounds").glob("*.wav"))
     if a.audio and not wavs:
         from audio_gen import generate_library
-        generate_library(HERE / "library")
-        wavs = sorted((HERE / "library").glob("*.wav"))
+        generate_library(HERE / "sounds")
+        wavs = sorted((HERE / "sounds").glob("*.wav"))
     sat = sorted((HERE / "sat_library").glob("*.jpg"))
     sat_clean = [f for f in sat if f.name.startswith("clean")]
     sat_bad = [f for f in sat if f.name.startswith("discharge")]
