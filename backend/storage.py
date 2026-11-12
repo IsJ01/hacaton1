@@ -100,6 +100,16 @@ def list_sound_events(buoy_id, label, ts_from, ts_to, limit: int, offset: int) -
     return total, [_sound(r) for r in rows]
 
 
+def count_sound_labels_since(ts_from: str) -> dict[str, dict[str, int]]:
+    """Сколько событий каждой метки было у каждого буя начиная с ts_from: {buoy_id: {label: n}}."""
+    rows = _query("SELECT buoy_id, label, COUNT(*) AS n FROM sound_events "
+                  "WHERE timestamp >= ? AND buoy_id IS NOT NULL GROUP BY buoy_id, label", (ts_from,))
+    result: dict[str, dict[str, int]] = {}
+    for r in rows:
+        result.setdefault(r["buoy_id"], {})[r["label"]] = r["n"]
+    return result
+
+
 # ---------- солёность ----------
 def add_measurement(measurement_id: str, buoy_id: str, timestamp: str, salinity: float) -> None:
     _execute("INSERT INTO measurements VALUES (?, ?, ?, ?)", (measurement_id, buoy_id, timestamp, salinity))
